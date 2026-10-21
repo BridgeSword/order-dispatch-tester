@@ -159,7 +159,7 @@ function renderSteps(){stepPoolSig=poolNames().join('|');let tb=$('steps').tBodi
  <td><input class=stid size=6 value="${esc(s.id)}" onchange="setF(${i},'id',this.value.trim())"><br><span class=dim title="${t('step.suffixTip')}">${t('step.suffix')}</span><input size=8 value="${esc(s.blockSuffix||'')}" placeholder="-${esc(s.id)}" onchange="setF(${i},'blockSuffix',this.value.trim())"></td>
  <td><input class=stname size=9 value="${esc(s.name||'')}" onchange="setF(${i},'name',this.value)"></td><td>${locCell(s,i)}</td>
  <td><input class=stop list=dl_ops size=10 value="${esc(s.operation||'none')}" onfocus="this.placeholder=this.value;this.value=''" onblur="if(!this.value)this.value=this.placeholder" onchange="if(this.value.trim())setF(${i},'operation',this.value.trim())"></td>
- <td><textarea class=stargs rows=3 onchange="setArgs(${i},this)">${esc(JSON.stringify(s.args||{}))}</textarea><span class="err argerr"></span></td>
+ <td><textarea class=stargs rows=7 spellcheck=false onchange="setArgs(${i},this)">${esc(JSON.stringify(s.args||{},null,2))}</textarea><span class="err argerr"></span></td>
  <td><label><input type=checkbox class=stvs ${s.vsOn?'checked':''} onchange="setVs(${i},'on',this.checked)">${t('step.vsOn')}</label><br><input type=number step=0.001 value="${vs.head}" onchange="setVs(${i},'head',this.value)"> <input type=number step=0.001 value="${vs.tail}" onchange="setVs(${i},'tail',this.value)"></td>
  <td><button class=rm onclick=rmStep(${i}) title="${t('btn.del')}">✕</button></td>`;
  tr.querySelector('.hdl').addEventListener('dragstart',e=>{e.dataTransfer.setData('text/plain',String(i));e.dataTransfer.effectAllowed='move'});
