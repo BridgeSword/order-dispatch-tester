@@ -93,10 +93,13 @@ function candHtml(s,manual){let c=s.preInfo||(s.preCands||[]).map(n=>({name:n}))
 function renderSt(){let pe=preOvParse().errs;if($('pre_err'))$('pre_err').textContent=pe.join('\n');let q=$('q').value.toLowerCase(),tf=$('tf').value.toLowerCase(),ov=preOv(),pn=poolNames(),sig=pn.join('|');
  if(stSig!==sig){$('st').innerHTML='';stTable=null;stSig=sig}
  if(!stTable)stTable=mkTable($('st'),[t('st.name'),t('st.type'),t('st.xy'),t('st.pre'),t('st.pick')]);
- syncRows(stTable.tBodies[0],stations.filter(s=>s.name.toLowerCase().includes(q)&&(s.type+s.name).toLowerCase().includes(tf)).slice(0,500).map(s=>{let miss=s.missing&&allSt.length,pp=ov[s.name]||s.pre||'',pall=preOvParse().m[s.name],tt=(s.preSrc||'')+(ov[s.name]?' ('+t('pre.manual')+')':''),cl=candHtml(s,pall),inAny=pn.some(r=>(pools[r]||[]).includes(s.name));
-  return {k:s.name,st:miss?'background:#fdd':'',c:[esc(s.name)+(miss?` <b style=color:red>${t('msg.notInScene')}</b>`:''),esc(s.type),s.x!=null?s.x.toFixed(2)+','+s.y.toFixed(2):'',
-  {h:(inAny?'<b>'+esc(pp)+'</b>':esc(pp))+cl,title:tt},
-  pn.map(r=>`<button onclick="pick('${s.name}','${r}')" style="${(pools[r]||[]).includes(s.name)?'font-weight:bold;color:'+pcol(r):''}">${esc(plab(r))}</button>`).join('')]}}));draw()}
+ let inSel={};pn.forEach(r=>(pools[r]||[]).forEach(n=>{(inSel[n]=inSel[n]||[]).includes(r)||inSel[n].push(r)}));
+ let rows=Object.keys(inSel).map(n=>stMap[n]||stations.find(x=>x.name==n)||{name:n,type:n.replace(/\d.*/,''),x:null,y:null,pre:'',missing:true}).filter(s=>s.name.toLowerCase().includes(q)&&((s.type||'')+s.name).toLowerCase().includes(tf));
+ $('st_empty').textContent=Object.keys(inSel).length?'':t('st.emptySel');
+ syncRows(stTable.tBodies[0],rows.map(s=>{let miss=(s.missing||!stMap[s.name])&&allSt.length,pp=ov[s.name]||s.pre||'',pall=preOvParse().m[s.name],tt=(s.preSrc||'')+(ov[s.name]?' ('+t('pre.manual')+')':''),cl=candHtml(s,pall);
+  return {k:s.name,st:miss?'background:#fdd':'',c:[esc(s.name)+(miss?` <b style=color:red>${t('msg.notInScene')}</b>`:''),esc(s.type||''),s.x!=null?s.x.toFixed(2)+','+s.y.toFixed(2):'',
+  {h:'<b>'+esc(pp)+'</b>'+cl,title:tt},
+  inSel[s.name].map(r=>`<span class=chip style="color:${pcol(r)};border-color:${pcol(r)};background:${pcol(r)}14">${esc(plab(r))}</span>`).join(' ')]}}));draw()}
 let hlSt=new Set();
 function chips(a,r){let ov=preOv(),c=pcol(r);return a.map(n=>{let pp=ov[n]||(stMap[n]||stations.find(x=>x.name==n)||{}).pre||'';
  let tt=t('pre.of')+': '+(pp||(allSt.length?t('pre.none'):t('pre.loading')))+(ov[n]?' ('+t('pre.manual')+')':'');

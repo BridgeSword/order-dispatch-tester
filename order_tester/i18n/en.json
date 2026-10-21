@@ -259,7 +259,7 @@
  "st.mapHint": "(you can also click stations on the Map tab)",
  "st.name": "Station",
  "st.paste": "Paste stations manually (comma/newline separated)",
- "st.pick": "Add to pool",
+ "st.pick": "Pools",
  "st.pre": "Pre-point",
  "st.search": "Search",
  "st.type": "Type",
@@ -315,5 +315,7 @@
  "tpl.saved": "saved",
  "tpl.title": "Description",
  "tpl.unsaved": "unsaved...",
- "vs.num": "variableShape head/tail must be numbers"
+ "vs.num": "variableShape head/tail must be numbers",
+ "st.emptySel": "No station is in any pool yet. Add stations by clicking them on the Map tab, via \"Paste stations manually\", or with the controls next to each pool.",
+ "st.selOnly": "Read-only: only stations already in a pool are listed"
 }

@@ -259,7 +259,7 @@
  "st.mapHint": "(在\"地图\"页点击站点也可加入站点池)",
  "st.name": "站点",
  "st.paste": "手动粘贴站点(逗号/换行分隔)",
- "st.pick": "加入池",
+ "st.pick": "所属池",
  "st.pre": "前置点",
  "st.search": "搜索",
  "st.type": "类型",
@@ -315,5 +315,7 @@
  "tpl.saved": "已保存",
  "tpl.title": "说明",
  "tpl.unsaved": "未保存...",
- "vs.num": "variableShape 的 head/tail 必须是数字"
+ "vs.num": "variableShape 的 head/tail 必须是数字",
+ "st.emptySel": "还没有站点加入任何池。添加方式：在「地图」页点选站点，使用「手动粘贴站点」，或用各池旁边的添加控件。",
+ "st.selOnly": "只读：仅列出已加入池的站点"
 }

@@ -23,7 +23,7 @@
  <span data-i18n=st.search></span> <input id=q oninput=renderSt() size=12> <span data-i18n=st.type></span> <input id=tf oninput=renderSt() size=6 placeholder="AP/LM">
  <details><summary data-i18n=st.paste></summary><textarea id=paste rows=3 cols=40></textarea><button onclick=usePaste() data-i18n=btn.use></button></details>
  <small data-i18n=st.mapHint></small>
- <div id=st></div></fieldset>
+ <div class=dim data-i18n="st.selOnly"></div><div id=st_empty class=dim style="padding:6px;color:#a60"></div><div id=st></div></fieldset>
 <fieldset class=sub data-sub=pool><legend data-i18n=pool.legend></legend>
  <div id=pools></div>
  <span data-i18n=pool.add></span> <input id=newpool size=10 placeholder="pallet2"> <button onclick=addPool() data-i18n=btn.add></button>
