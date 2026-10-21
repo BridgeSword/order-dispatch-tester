@@ -48,10 +48,10 @@ class E2ETest(unittest.TestCase):
         self.assertEqual(C.S["prepoints"].get("AP1"), "LM1")
         st = call(self.port, "/api/stations"); self.assertTrue(st["ok"]); self.assertEqual(len(st["stations"]), 24)
 
-    def _run_job(self):
+    def _run_job(self, share=True):
         self.addCleanup(setattr, fake_rds, "SCENE_DELAY", 0)
         jid = call(self.port, "/api/scene_geom?refresh=1&async=1")["job"]
-        self.assertEqual(call(self.port, "/api/scene_geom?refresh=1&async=1")["job"], jid)  # concurrent callers share the job
+        if share: self.assertEqual(call(self.port, "/api/scene_geom?refresh=1&async=1")["job"], jid)  # concurrent callers share the running job
         seen = []; t0 = time.time()
         while time.time() - t0 < 15:
             j = call(self.port, "/api/scene_job?id=" + jid); self.assertTrue(j["ok"])
@@ -76,7 +76,7 @@ class E2ETest(unittest.TestCase):
         self.assertEqual(j["stage"], "done"); dl = [x for x in seen if x[0] == "download"]
         self.assertTrue(dl and all(x[2] is None for x in dl), dl); self.assertGreater(max(x[1] or 0 for x in dl), 0)
         self.addCleanup(setattr, fake_rds, "SCENE_FAIL", False); fake_rds.SCENE_FAIL = True; fake_rds.SCENE_DELAY = 0
-        j, _ = self._run_job(); self.assertEqual(j["stage"], "failed"); self.assertIn("500", j["result"]["sceneErr"])
+        j, _ = self._run_job(share=False); self.assertEqual(j["stage"], "failed"); self.assertIn("500", j["result"]["sceneErr"])
         self.assertFalse(call(self.port, "/api/scene_job?id=nope")["ok"])
 
     def test_geom_cached_only_and_no_cache_headers(self):

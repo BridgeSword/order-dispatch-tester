@@ -114,7 +114,7 @@ def load_scene_stations():
     try: set_groups(js); stations = AD().parse_stations(js)
     except Exception as e: return None, "/scene parse error: %s" % e
     S["st_cache"] = (time.time(), stations)
-    with lock: S["prepoints"] = {p["name"]: p["pre"] for p in stations if p.get("pre")}
+    with lock: S["prepoints"] = {p["name"]: p["pre"] for p in stations if p.get("pre")}; S["precands"] = _precands(stations)
     return stations, ""
 
 def ensure_prepoints():
@@ -141,11 +141,19 @@ def load_smap(path):
     except Exception as e: log("smap_cache_err", err=str(e))
     return curves, pts, cell
 
+def _precands(stations):
+    out = {}
+    for q in stations:
+        info = q.get("preInfo")
+        if not info and q.get("preCands"): info = [{"name": c, "dir": None, "dist": None, "lm": None} for c in q["preCands"]]  # old cache
+        if info: out[q["name"]] = info
+    return out
+
 def _apply_geom(g):
     """make a successfully loaded scene the current one (memory)"""
     with lock:
         S["geom"] = g; st = g.get("stations") or []
-        if st: S["prepoints"] = {q["name"]: q["pre"] for q in st if q.get("pre")}; S["st_cache"] = (g.get("loadedAt") or time.time(), st)
+        if st: S["prepoints"] = {q["name"]: q["pre"] for q in st if q.get("pre")}; S["precands"] = _precands(st); S["st_cache"] = (g.get("loadedAt") or time.time(), st)
         gs = g.get("groups") or []
         if gs: S["groups"] = gs; S["robot_group"] = {rid: x["name"] for x in gs for rid in x["robots"]}
 
@@ -270,10 +278,43 @@ def order_state(oid):
         for k in sorted(S["odcache"], key=lambda k: S["odcache"][k][1])[:200]: S["odcache"].pop(k, None)
     return state or "?"
 
+PRE_LINE_RE = __import__("re").compile(r"^\s*([^\s=:|,，]+)\s*(?:[=:]\s*|[\s,，]+)(.*?)\s*$")
+PRE_VAL_RE = __import__("re").compile(r"^[^\s=:|,，]+$")
+
+def parse_pre_text(text):
+    """manual pre-point map text -> ({station: [pre, ...]}, [errors]).
+    One station per line: AP1=LM1 | AP1=LM1|LM2 (also 'AP1:LM1', legacy 'AP1 LM1' / 'AP1,LM1'). '#' starts a comment."""
+    out, errs = {}, []
+    for i, raw in enumerate((text or "").splitlines(), 1):
+        line = raw.split("#", 1)[0].strip()
+        if not line: continue
+        m = PRE_LINE_RE.match(line)
+        vals = [v.strip() for v in m.group(2).split("|")] if m else []
+        if not m or not vals or any(not PRE_VAL_RE.match(v) for v in vals):
+            errs.append(msg("srv.preLineBad", n=i, line=raw.strip())); continue
+        st = m.group(1)
+        if st in out: errs.append(msg("srv.preLineDup", n=i, st=st)); continue
+        out[st] = list(dict.fromkeys(vals))
+    return out, errs
+
+def _ov_list(cfg, name):
+    v = (cfg.get("preOverrides") or {}).get(name)
+    if not v: return []
+    if isinstance(v, str): return [x.strip() for x in v.split("|") if x.strip()]
+    return [str(x) for x in v if x]
+
 def pre_point(name, cfg):
-    ov = cfg.get("preOverrides") or {}
-    if ov.get(name): return ov[name]
+    ov = _ov_list(cfg, name)
+    if ov: return ov[0]
     return S["prepoints"].get(name, "")
+
+def pre_cands(name, cfg):
+    """candidates for the pre-point selectors: manual values (enriched with scene info) or the scene list"""
+    scene = S.get("precands", {}).get(name) or ([{"name": S["prepoints"][name], "dir": None, "dist": None, "lm": None}] if S["prepoints"].get(name) else [])
+    ov = _ov_list(cfg, name)
+    if not ov: return scene
+    by = {c["name"]: c for c in scene}
+    return [dict(by.get(v) or {"name": v, "dir": None, "dist": None, "lm": None}, manual=True) for v in ov]
 
 # ---------------------------------------------------------------- templates / cfg
 def resolve_template(b):
@@ -298,6 +339,10 @@ def cfg_pools(b, t):
 def prepare_cfg(b):
     """validate pools + pre-points. returns (cfg, template, pools, warn, err)"""
     set_base(b.get("base"))
+    if "preOverridesText" in b:
+        ov, perr = parse_pre_text(b.get("preOverridesText"))
+        if perr: return b, None, {}, "", "\n".join(perr)
+        b["preOverrides"] = ov
     try: t = resolve_template(b)
     except ValueError as e: return b, None, {}, "", str(e)
     pools = cfg_pools(b, t); roles = T.pool_roles(t)
@@ -322,7 +367,7 @@ def prepare_cfg(b):
 
 def make_draft(picks, t, cfg, oid=None):
     """neutral order -> adapter payload -> draft record (ValueError: missing pre-point)"""
-    order = T.build_order(t, picks, cfg, lambda n: pre_point(n, cfg), oid)
+    order = T.build_order(t, picks, cfg, lambda n: pre_point(n, cfg), oid, cands_of=lambda n: pre_cands(n, cfg))
     body = AD().build_payload(order)
     roles = T.pool_roles(t)
     g = lambda x: "%g" % x if isinstance(x, (int, float)) else str(x)
@@ -331,7 +376,7 @@ def make_draft(picks, t, cfg, oid=None):
     first, last = (picks.get(roles[0], ""), picks.get(roles[-1], "")) if roles else ("", "")
     now = time.time(); dpre = pre_point(last, cfg)
     return {"id": body["id"], "pair": [picks[r] for r in roles], "picks": dict(picks), "template": t.get("name"), "adapter": AD().name,
-            "pre": dpre, "dropPre": dpre, "pickPre": pre_point(first, cfg),
+            "pre": dpre, "dropPre": dpre, "pickPre": pre_point(first, cfg), "preChosen": order.get("preChosen") or [],
             "vsTag": vsTag, "vehicle": body.get("vehicle", ""), "group": body.get("group", ""), "state": DRAFT,
             "sent": now, "changed": now, "created": now, "sig": "", "error": None, "body": body}
 
@@ -343,7 +388,14 @@ def preview(b):
         cand = [x for x in pools.get(r, []) if x not in picks.values()] or pools.get(r) or ["<%s>" % r]
         picks[r] = cand[0]
     def pre(n): return pre_point(n, b) or ("<pre:%s>" % n if b.get("placeholderPre", True) else "")
-    order = T.build_order(t, picks, b, pre, "dl-preview")
+    if "preOverridesText" in b:
+        ov, perr = parse_pre_text(b.get("preOverridesText"))
+        if perr: raise ValueError("\n".join(perr))
+        b["preOverrides"] = ov
+    def cands(n):
+        c = pre_cands(n, b)
+        return c if c else None  # no scene yet -> placeholder via pre()
+    order = T.build_order(t, picks, b, pre, "dl-preview", cands_of=cands, lenient=b.get("placeholderPre", True) and not S["prepoints"])
     return {"ok": True, "picks": picks, "order": order, "payload": AD().build_payload(order)}
 
 # ---------------------------------------------------------------- persistence

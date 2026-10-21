@@ -63,8 +63,11 @@ async function ensureScene(quiet){if(allSt.length)return true;if(sceneP)return s
 async function usePaste(){let names=[...new Set($('paste').value.split(/[\s,，;；]+/).filter(x=>x))];await ensureScene();
  stations=names.map(n=>stMap[n]?{...stMap[n]}:{name:n,type:n.replace(/\d.*/,''),x:null,y:null,pre:'',missing:true});
  let miss=stations.filter(s=>s.missing).map(s=>s.name);$('info').innerHTML=t('msg.pasted',{n:names.length})+(allSt.length?'':' '+t('msg.noSceneCoords'))+(miss.length&&allSt.length?` <b style=color:red>${t('msg.notInScene')}: ${esc(miss.join(', '))}</b>`:'');renderSt();renderPool();fitAll()}
-function preOv(){let m={};$('pre_ov').value.split(/\n/).forEach(l=>{let a=l.split(/[=:，,\s]+/).filter(x=>x);if(a.length>=2)m[a[0]]=a[1]});return m}
-function preOf(n){let o=preOv();if(o[n])return o[n];let s=stMap[n]||stations.find(x=>x.name==n);return s&&s.pre||''}
+function preOvParse(){/* same rules as server parse_pre_text: STATION=PRE or STATION=PRE1|PRE2 per line, # comment */
+ let m={},errs=[];$('pre_ov').value.split(/\n/).forEach((raw,k)=>{let l=raw.split('#')[0].trim();if(!l)return;let x=l.match(/^([^\s=:|,，]+)\s*(?:[=:]\s*|[\s,，]+)(.*?)\s*$/),v=x?x[2].split('|').map(s=>s.trim()):[];
+  if(!x||!v.length||v.some(s=>!/^[^\s=:|,，]+$/.test(s))){errs.push(t('srv.preLineBad',{n:k+1,line:raw.trim()}));return}if(m[x[1]]){errs.push(t('srv.preLineDup',{n:k+1,st:x[1]}));return}m[x[1]]=[...new Set(v)]});return {m,errs}}
+function preOv(){let r=preOvParse().m,o={};for(const k in r)o[k]=r[k][0];return o}
+function preOf(n){let o=preOv();/* default (nearest) pre-point */if(o[n])return o[n];let s=stMap[n]||stations.find(x=>x.name==n);return s&&s.pre||''}
 function pmRole(){let r=document.querySelector('input[name=pm]:checked');return r?r.value:pmSaved}
 function pick(n,role){role=role||pmRole();let a=pools[role]||(pools[role]=[]);let i=a.indexOf(n);i>=0?a.splice(i,1):a.push(n);renderPool();renderSt();prevLater()}
 // incremental table rows (keeps scroll / selection / open JSON boxes)
@@ -81,12 +84,16 @@ const PAL=['#1a9a1a','#d01010','#1060d0','#c07000','#008b8b','#a0309a','#606000'
 function pcol(r){if(r=='start')return PAL[0];if(r=='end')return PAL[1];let i=poolNames().filter(x=>x!='start'&&x!='end').indexOf(r);return PAL[2+((i<0?0:i)%(PAL.length-2))]}
 function plab(r){return r=='start'?t('pool.start'):r=='end'?t('pool.end'):r}
 let stTable=null,stSig='';
-function renderSt(){let q=$('q').value.toLowerCase(),tf=$('tf').value.toLowerCase(),ov=preOv(),pn=poolNames(),sig=pn.join('|');
+function candHtml(s,manual){let c=s.preInfo||(s.preCands||[]).map(n=>({name:n})),out=[];
+ if(manual&&manual.length>1)out.push(t('pre.manualList')+': '+manual.map(esc).join(' | '));
+ if(c.length>1||(c.length==1&&c[0].dir))out.push(c.map((x,i)=>`${i+1}.${esc(x.name)}${x.dir?'('+t('pre.dir.'+x.dir)+(x.dist!=null?' '+x.dist.toFixed(1)+'m':'')+(x.lm===false?' ·'+t('pre.notLm'):'')+')':''}`).join(' '));
+ return out.length?'<br><span class=dim style=font-size:11px>'+out.join('<br>')+'</span>':''}
+function renderSt(){let pe=preOvParse().errs;if($('pre_err'))$('pre_err').textContent=pe.join('\n');let q=$('q').value.toLowerCase(),tf=$('tf').value.toLowerCase(),ov=preOv(),pn=poolNames(),sig=pn.join('|');
  if(stSig!==sig){$('st').innerHTML='';stTable=null;stSig=sig}
  if(!stTable)stTable=mkTable($('st'),[t('st.name'),t('st.type'),t('st.xy'),t('st.pre'),t('st.pick')]);
- syncRows(stTable.tBodies[0],stations.filter(s=>s.name.toLowerCase().includes(q)&&(s.type+s.name).toLowerCase().includes(tf)).slice(0,500).map(s=>{let miss=s.missing&&allSt.length,pp=ov[s.name]||s.pre||'',tt=(s.preCands||[]).join(' ')+' '+(s.preSrc||'')+(ov[s.name]?' ('+t('pre.manual')+')':''),inAny=pn.some(r=>(pools[r]||[]).includes(s.name));
+ syncRows(stTable.tBodies[0],stations.filter(s=>s.name.toLowerCase().includes(q)&&(s.type+s.name).toLowerCase().includes(tf)).slice(0,500).map(s=>{let miss=s.missing&&allSt.length,pp=ov[s.name]||s.pre||'',pall=preOvParse().m[s.name],tt=(s.preSrc||'')+(ov[s.name]?' ('+t('pre.manual')+')':''),cl=candHtml(s,pall),inAny=pn.some(r=>(pools[r]||[]).includes(s.name));
   return {k:s.name,st:miss?'background:#fdd':'',c:[esc(s.name)+(miss?` <b style=color:red>${t('msg.notInScene')}</b>`:''),esc(s.type),s.x!=null?s.x.toFixed(2)+','+s.y.toFixed(2):'',
-  {h:inAny?'<b>'+esc(pp)+'</b>':esc(pp),title:tt},
+  {h:(inAny?'<b>'+esc(pp)+'</b>':esc(pp))+cl,title:tt},
   pn.map(r=>`<button onclick="pick('${s.name}','${r}')" style="${(pools[r]||[]).includes(s.name)?'font-weight:bold;color:'+pcol(r):''}">${esc(plab(r))}</button>`).join('')]}}));draw()}
 let hlSt=new Set();
 function chips(a,r){let ov=preOv(),c=pcol(r);return a.map(n=>{let pp=ov[n]||(stMap[n]||stations.find(x=>x.name==n)||{}).pre||'';
@@ -158,7 +165,14 @@ const OPS=['Wait','ForkLoad','ForkUnload','ForkHeight','Script','JackLoad','Jack
 function locCell(s,i){let L=s.location,ty=L.type,pn=poolNames(),opts=cur.steps.map((x,j)=>j==i?'':`<option value="${esc(x.id)}" ${L.step==x.id?'selected':''}>${j+1}. ${esc(x.name||x.id)}</option>`).join('');
  return `<select class=loctype onchange="setLoc(${i},'type',this.value)">${['pool','pre','fixed'].map(x=>`<option value=${x} ${ty==x?'selected':''}>${t('loc.'+x)}</option>`).join('')}</select><br>`+
  (ty=='pool'?poolSelect(L.pool,i):
-  ty=='pre'?`<select class=locstep onchange="setLoc(${i},'step',this.value)"><option value="">-</option>${opts}</select>`:`<input class=locfixed size=10 value="${esc(L.station||'')}" placeholder="LM1" onchange="setLoc(${i},'station',this.value)">`)}
+  ty=='pre'?`<select class=locstep onchange="setLoc(${i},'step',this.value)"><option value="">-</option>${opts}</select><br>`+selCell(L,i):`<input class=locfixed size=10 value="${esc(L.station||'')}" placeholder="LM1" onchange="setLoc(${i},'station',this.value)">`)}
+const PSEL=['nearest','index','name','dir','random'];
+function selCell(L,i){let by=L.select||'nearest',arg=L.selArg==null?'':String(L.selArg);
+ let h=`<select class=locsel title="${esc(t('sel.tip'))}" onchange="setLoc(${i},'select',this.value)">${PSEL.map(x=>`<option value=${x} ${by==x?'selected':''}>${t('sel.'+x)}</option>`).join('')}</select>`;
+ if(by=='dir')h+=` <select class=locselarg onchange="setLoc(${i},'selArg',this.value)">${['in','out'].map(x=>`<option value=${x} ${arg==x?'selected':''}>${t('pre.dir.'+x)}</option>`).join('')}</select>`;
+ else if(by=='index')h+=` <input class=locselarg type=number min=1 style=width:4em value="${esc(arg||'1')}" onchange="setLoc(${i},'selArg',this.value)">`;
+ else if(by=='name')h+=` <input class=locselarg size=8 value="${esc(arg)}" placeholder="LM1*" onchange="setLoc(${i},'selArg',this.value)">`;
+ return h}
 // pool dropdown for a 'pool' step: every existing pool (display names) + the step's own value if it is not a pool yet.
 // (was <input list=datalist>: browsers filter datalist suggestions by the current value, so only 'start' was offered)
 function poolSelect(v,i){let pn=poolNames();if(v&&!pn.includes(v))pn=pn.concat([v]);
@@ -182,7 +196,7 @@ function renderSteps(){stepPoolSig=poolNames().join('|');let tb=$('steps').tBodi
  if(!$('dl_ops')){let d=document.createElement('datalist');d.id='dl_ops';d.innerHTML=OPS.map(o=>`<option value="${o}">`).join('');document.body.appendChild(d)}}
 function setF(i,k,v){let s=cur.steps[i];if(k=='id'){let old=s.id;if(!v||cur.steps.some((x,j)=>j!=i&&x.id==v)){alert(t('step.dupId'));renderSteps();return}cur.steps.forEach(x=>{if(x.location.type=='pre'&&x.location.step==old)x.location.step=v})}
  if(k=='blockSuffix'&&!v)delete s.blockSuffix;else s[k]=v;renderSteps();tplChanged()}
-function setLoc(i,k,v){let L=cur.steps[i].location;if(k=='type'){cur.steps[i].location=v=='pool'?{type:'pool',pool:poolNames()[0]||'start'}:v=='pre'?{type:'pre',step:(cur.steps.find((x,j)=>j!=i&&x.location.type=='pool')||{}).id||''}:{type:'fixed',station:''}}else L[k]=v.trim();renderSteps();tplChanged()}
+function setLoc(i,k,v){let L=cur.steps[i].location;if(k=='type'){cur.steps[i].location=v=='pool'?{type:'pool',pool:poolNames()[0]||'start'}:v=='pre'?{type:'pre',step:(cur.steps.find((x,j)=>j!=i&&x.location.type=='pool')||{}).id||''}:{type:'fixed',station:''}}else if(k=='select'){if(v=='nearest'){delete L.select;delete L.selArg}else{L.select=v;L.selArg=v=='dir'?'in':v=='index'?'1':v=='name'?(L.selArg&&L.select=='name'?L.selArg:''):undefined;if(L.selArg===undefined)delete L.selArg}}else L[k]=v.trim();renderSteps();tplChanged()}
 function setArgs(i,ta){let v;try{v=JSON.parse(ta.value||'{}');if(!v||typeof v!='object'||Array.isArray(v))throw new Error(t('step.argsObj'))}catch(e){ta.nextElementSibling.textContent=e.message;return}ta.nextElementSibling.textContent='';cur.steps[i].args=v;tplChanged()}
 function setVs(i,k,v){let s=cur.steps[i];s.variableShape=s.variableShape||{head:1.539,tail:1.539};if(k=='on')s.vsOn=v;else{let n=parseFloat(v);if(!isFinite(n)){alert(t('vs.num'));return}s.variableShape[k]=n}tplChanged()}
 function mvStep(i,d){moveStep(i,i+d)}
@@ -253,8 +267,8 @@ async function uploadSmap(){let f=$('smapf').files[0];if(!f)return;$('geominfo')
  let r=await (await fetch('/api/smap_upload?name='+encodeURIComponent(f.name),{method:'POST',body:f})).json();if(!r.ok){alert(r.err);$('geominfo').textContent=r.err;return}C.dataset.fitted='';setGeom(r)}
 async function useSmapPath(){$('geominfo').textContent=t('map.parsing');let r=await post('/api/smap_path',{path:$('smap_path').value});if(!r.ok){alert(r.err);$('geominfo').textContent=r.err;return}C.dataset.fitted='';setGeom(r)}
 // ---------------- generate / drafts ----------------
-function dispCfg(){return {base:$('base').value,vehicle:$('veh').value.trim(),group:$('grp').value,priority:+$('pri').value,label:$('label').value.trim(),preOverrides:preOv()}}
-async function generate(){if(dirty&&!(await saveTpl()))return;let roles=cur.pools||[];
+function dispCfg(){return {base:$('base').value,vehicle:$('veh').value.trim(),group:$('grp').value,priority:+$('pri').value,label:$('label').value.trim(),preOverrides:preOvParse().m,preOverridesText:$('pre_ov').value}}
+async function generate(){if(dirty&&!(await saveTpl()))return;{let pe=preOvParse().errs;if(pe.length){alert(pe.join('\n'));return}}let roles=cur.pools||[];
  let empty=roles.filter(r=>!(pools[r]||[]).length);if(empty.length){alert(t('gen.poolEmpty',{p:empty.map(plab).join(', ')}));return}
  if($('noself').checked&&roles.length>1&&roles.every(r=>pools[r].length==1)&&new Set(roles.map(r=>pools[r][0])).size<roles.length){alert(t('gen.sameOnly'));return}
  let need=needRoles(),miss=[];if(need.size&&!allSt.length&&!(await ensureScene()))return;if(allSt.length)for(const r of need){let m=(pools[r]||[]).filter(e=>!preOf(e));if(m.length)miss.push(plab(r)+': '+m.join(', '))}
@@ -379,7 +393,7 @@ async function tick(){try{let r=await (await fetch('/api/state')).json();if(r.gr
   if(col)continue;
   for(const o of g.rows){let dr=o.state==DRAFT,done=term.includes(o.state),stk=isAct(o)&&hasVeh(o)&&o.idle>T;
   let age=o._age,idle=o._idle,dur=o._dur;
-  items.push({k:o.id,cls:stk?'stuck':done?'done':'',st:dr?'background:#fffbe6':'',c:[`<input type=checkbox ${sel.has(o.id)?'checked':''} onchange="this.checked?sel.add('${o.id}'):sel.delete('${o.id}')">`,esc(o.id)+(o.template&&o.template!='default'?` <span class=dim>[${esc(o.template)}]</span>`:''),esc(o.pairS),
+  items.push({k:o.id,cls:stk?'stuck':done?'done':'',st:dr?'background:#fffbe6':'',c:[`<input type=checkbox ${sel.has(o.id)?'checked':''} onchange="this.checked?sel.add('${o.id}'):sel.delete('${o.id}')">`,esc(o.id)+(o.template&&o.template!='default'?` <span class=dim>[${esc(o.template)}]</span>`:''),(o.preChosen&&o.preChosen.length?`<span title="${esc(o.preChosen.map(c=>c.where+': '+c.station+' → '+c.pre+' ('+c.select+')').join('\n'))}">${esc(o.pairS)} <span class=dim>ⓟ</span></span>`:esc(o.pairS)),
    o.vsTag?`<span style="background:#e6f0ff;padding:0 3px;font-size:11px">${esc(o.vsTag)}</span>`:'<span class=dim>-</span>',esc(o.vehicle||'')+(o.group?`${o.vehicle?' ':''}<span style="background:#eef7e6;padding:0 3px;font-size:11px" title="${t('disp.groupTip')}">${t('ord.grp')}:${esc(o.group)}</span>`:''),dr?`<b style=color:#a60>${t('state.draft')}</b>`:o.state=='FAILED'?`<b style=color:#e67e00 title="${t('ord.failedTip')}">FAILED</b>`:esc(o.state),esc(o.blocks||''),fmtTs(o._created),dr?`<span class=dim>${t('ord.genAgo',{t:fmt(o.age)})}</span>`:fmt(age),dr?'':idle==null?{h:'<span class=dim>-</span>',title:t('ord.noVehTip')}:{h:fmt(idle),title:''},dr?'':{h:fmtTs(o.started),title:o.startedSrc=='rds'?t('ord.backfillTip'):''},dr?'':{h:fmtTs(o.ended),title:o.endedSrc=='rds'?t('ord.backfillTip'):''},dr?'':{h:fmtDur(dur),title:o.ended?'':t('ord.inprog')},esc(o.error||''),
    `<button onclick="toggleJson('${o.id}')">${jsonOpen.has(o.id)?t('ord.hide'):t('ord.view')}</button>`]});
   if(jsonOpen.has(o.id))items.push({k:'json:'+o.id,c:['',{h:`<pre class=jbox style="margin:0;max-height:300px;overflow:auto;background:#f6f6f6;font-size:11px">${esc(jsonCache[o.id]||t('msg.loading'))}</pre>`,span:14}]})}}

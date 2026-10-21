@@ -1,0 +1,61 @@
+{
+  "name": "pre_select_demo",
+  "title": "Pre-point selectors demo: pick drive-in pre-point for the pick-up wait, the 2nd candidate for the drop wait",
+  "version": 1,
+  "steps": [
+    {
+      "id": "pw",
+      "name": "取货前置(驶入)",
+      "enabled": true,
+      "location": {
+        "type": "pre",
+        "step": "s",
+        "select": "dir",
+        "selArg": "in"
+      },
+      "operation": "Wait",
+      "args": {}
+    },
+    {
+      "id": "s",
+      "name": "取货",
+      "enabled": true,
+      "location": {
+        "type": "pool",
+        "pool": "start"
+      },
+      "operation": "JackLoad",
+      "args": {}
+    },
+    {
+      "id": "dw",
+      "name": "放货前置(第2个候选)",
+      "enabled": true,
+      "location": {
+        "type": "pre",
+        "step": "e",
+        "select": "index",
+        "selArg": 2
+      },
+      "operation": "Wait",
+      "args": {
+        "note": "from {preOf:s@out} via {pre:end@name=LM*}"
+      }
+    },
+    {
+      "id": "e",
+      "name": "放货",
+      "enabled": true,
+      "location": {
+        "type": "pool",
+        "pool": "end"
+      },
+      "operation": "JackUnload",
+      "args": {}
+    }
+  ],
+  "pools": [
+    "start",
+    "end"
+  ]
+}

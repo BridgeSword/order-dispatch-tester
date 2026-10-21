@@ -9,6 +9,7 @@ A template is an ordered list of steps. Every step has
                   {"type": "pool",  "pool": "<pool name>"}       random/round-robin/... pick from a named pool
                   {"type": "pre",   "step": "<step id>"}          pre-point of another step's station
                                                                   (scene AP->LM derivation or the override map)
+                    optional "select": nearest (default) | index | name | dir | random, "selArg": see PRE_SELECT
                   {"type": "fixed", "station": "<station name>"}
   operation     operation name ("none" = move only)
   args          dict; strings may contain variables (see substitute())
@@ -18,7 +19,7 @@ A template is an ordered list of steps. Every step has
 Adapters (order_tester.adapters.*) turn the neutral order produced by build_order() into a
 dispatcher payload (e.g. RDS setOrder JSON).
 """
-import copy, itertools, json, os, random, re, uuid
+import copy, fnmatch, itertools, json, os, random, re, uuid
 
 DEFAULT_ARGS_START = {"disable_laser_id": 3, "end_height": 0.2, "rec_height": 0.09, "rec_target_obs": True,
                       "recfile": "plt/p0005.plt", "recognize": True, "start_height": 0.09}
@@ -77,6 +78,9 @@ def validate(t):
             errs.append(where + ": location.type must be pool/pre/fixed"); continue
         if loc["type"] == "pool" and not loc.get("pool"): errs.append(where + ": location.pool missing")
         if loc["type"] == "fixed" and not loc.get("station"): errs.append(where + ": location.station missing")
+        if loc["type"] == "pre" and (loc.get("select") or "nearest") != "nearest":
+            e = check_sel(*sel_of(loc))
+            if e: errs.append(where + ": " + e)
         vs = s.get("variableShape")
         if s.get("vsOn") and not (isinstance(vs, dict) and _num(vs.get("head")) is not None and _num(vs.get("tail")) is not None):
             errs.append(where + ": variableShape head/tail must be numbers")
@@ -115,12 +119,69 @@ def pool_roles(t, extra=()):
 def used_pool_roles(t):
     return pool_roles(t)
 
+# ---------------------------------------------------------------- pre-point selection
+PRE_SELECT = ("nearest", "index", "name", "dir", "random")
+# selArg: index -> 1-based candidate number; name -> exact name or wildcard (LM1*, *_A); dir -> in | out
+
+def sel_of(loc):
+    by = (loc or {}).get("select") or "nearest"; arg = (loc or {}).get("selArg")
+    return by, ("" if arg is None else str(arg).strip())
+
+def parse_sel(txt):
+    """variable suffix after '@': nearest | random | in | out | #N | N | name=PATTERN | PATTERN -> (by, arg)"""
+    t = (txt or "").strip()
+    if not t or t == "nearest": return "nearest", ""
+    if t == "random": return "random", ""
+    if t in ("in", "out"): return "dir", t
+    m = re.match(r"^#?(\d+)$", t)
+    if m: return "index", m.group(1)
+    if t.startswith("name="): return "name", t[5:]
+    return "name", t
+
+def check_sel(by, arg):
+    if by not in PRE_SELECT: return "select must be one of " + "/".join(PRE_SELECT)
+    if by == "index" and not (arg.isdigit() and int(arg) >= 1): return "select=index needs selArg = a number >= 1"
+    if by == "dir" and arg not in ("in", "out"): return "select=dir needs selArg = in or out"
+    if by == "name" and not arg: return "select=name needs selArg = a name or wildcard"
+    return ""
+
+def sel_label(by, arg):
+    return by if by in ("nearest", "random") else "%s=%s" % (by, arg)
+
+def pick_pre(cands, by, arg, rng=None):
+    """cands: [{name, dir, dist, lm}] in preference order. Returns a name or ''."""
+    if not cands: return ""
+    if by == "nearest": return cands[0]["name"]
+    if by == "index":
+        i = int(arg) - 1; return cands[i]["name"] if 0 <= i < len(cands) else ""
+    if by == "name":
+        for c in cands:
+            if c["name"] == arg or fnmatch.fnmatchcase(c["name"], arg): return c["name"]
+        return ""
+    if by == "dir":
+        for c in cands:
+            if c.get("dir") == arg: return c["name"]
+        return ""
+    if by == "random": return (rng or random).choice(cands)["name"]
+    return ""
+
 # ---------------------------------------------------------------- variables
 VAR_RE = re.compile(r"\{([A-Za-z_][A-Za-z0-9_]*)(?::([^{}:]+))?\}")
 
 class Ctx:
-    def __init__(self, oid, picks, steps, locs, pre_of, roles):
+    def __init__(self, oid, picks, steps, locs, pre_of, roles, choose=None):
         self.oid, self.picks, self.steps, self.locs, self.pre_of, self.roles = oid, picks, steps, locs, pre_of, roles
+        self.choose = choose; self.step = None
+    def _pre(self, station, arg, what):
+        """'<ref>@<selector>' -> pre-point by selector; plain -> legacy default (may be '')"""
+        if arg is not None and "@" in arg and self.choose:
+            by, sarg = parse_sel(arg.split("@", 1)[1])
+            e = check_sel(by, sarg)
+            if e: raise ValueError("{%s}: %s" % (what, e))
+            if by != "nearest":
+                where = "%s args {%s}" % ((self.step or {}).get("name") or (self.step or {}).get("id") or "?", what)
+                return self.choose(station, by, sarg, where)
+        return self.pre_of(station)
     def var(self, name, arg):
         if arg is None:
             if name in self.picks: return self.picks[name]
@@ -128,14 +189,15 @@ class Ctx:
             if name == "pickPre": return self.pre_of(self.picks.get(self._role("start", 0), ""))
             if name == "dropPre": return self.pre_of(self.picks.get(self._role("end", -1), ""))
             raise ValueError("unknown variable {%s}" % name)
-        if name == "pre": return self.pre_of(self.picks.get(arg, ""))
+        ref = arg.split("@", 1)[0].strip()
+        if name == "pre": return self._pre(self.picks.get(ref, ""), arg, "pre:" + arg)
         if name in ("stationOf", "preOf"):
-            s = resolve_step_ref(self.steps, arg)
+            s = resolve_step_ref(self.steps, ref)
             if s is None: raise ValueError("unknown step in {%s:%s}" % (name, arg))
             st = self.locs.get(s["id"], "")
             if name == "stationOf": return st
             loc = s.get("location") or {}
-            return self.pre_of(self.base_station(s)) if loc.get("type") != "pre" else self.pre_of(st)
+            return self._pre(self.base_station(s) if loc.get("type") != "pre" else st, arg, "preOf:" + arg)
         raise ValueError("unknown variable {%s:%s}" % (name, arg))
     def base_station(self, s):
         return self.locs.get(s["id"], "")
@@ -151,11 +213,25 @@ def substitute(v, ctx):
     return v
 
 # ---------------------------------------------------------------- build a neutral order
-def build_order(t, picks, cfg, pre_of, oid=None):
-    """picks: {pool name: station}. Returns a neutral order dict. ValueError if a needed pre-point is missing."""
+def build_order(t, picks, cfg, pre_of, oid=None, cands_of=None, rng=None, lenient=False):
+    """picks: {pool name: station}. Returns a neutral order dict. ValueError if a needed pre-point is missing.
+    pre_of(station) -> default pre-point; cands_of(station) -> [{name, dir, dist, lm}] for non-default selectors."""
     oid = oid or "dl-" + uuid.uuid4().hex[:12]
     steps = t["steps"]; roles = pool_roles(t)
-    locs = {}
+    locs = {}; chosen = []; memo = {}
+    def choose(station, by, arg, where):
+        key = (station, by, arg)
+        if key not in memo:
+            cands = (cands_of(station) if cands_of else None)
+            if cands is None: cands = [{"name": pre_of(station), "dir": None}] if pre_of(station) else []
+            memo[key] = pick_pre(cands, by, arg, rng)
+            if not memo[key] and lenient: memo[key] = "<pre:%s@%s>" % (station, sel_label(by, arg))
+            if not memo[key]:
+                names = ", ".join("%s(%s)" % (c["name"], c.get("dir") or "?") for c in cands) or "-"
+                raise ValueError("步骤 %s: 站点 %s 没有符合 %s 的前置点 / no pre-point matches %s for station %s [step %s] (候选/candidates: %s)"
+                                 % (where, station, sel_label(by, arg), sel_label(by, arg), station, where, names))
+        chosen.append({"where": where, "station": station, "pre": memo[key], "select": sel_label(by, arg)})
+        return memo[key]
     for s in steps:  # pool + fixed first (derived steps may point forwards)
         loc = s["location"]
         if loc["type"] == "pool": locs[s["id"]] = picks.get(loc["pool"], "")
@@ -165,26 +241,32 @@ def build_order(t, picks, cfg, pre_of, oid=None):
         if depth > len(steps): raise ValueError("circular pre-point reference at step " + s["id"])
         ref = resolve_step_ref(steps, s["location"].get("step"))
         base = resolve(ref, depth + 1)
-        p = pre_of(base)
-        if not p:
-            what = ("%s(%s)" % (ref["location"]["pool"], ref.get("name") or ref["id"])) if ref["location"]["type"] == "pool" else (ref.get("name") or ref["id"])
-            raise ValueError("%s %s 无前置点 / has no pre-point (scene derivation failed and no manual mapping) [step %s]" % (what, base, s.get("name") or s["id"]))
+        by, arg = sel_of(s["location"])
+        if by != "nearest":
+            p = choose(base, by, arg, s.get("name") or s["id"])
+        else:
+            p = pre_of(base)
+            if not p:
+                what = ("%s(%s)" % (ref["location"]["pool"], ref.get("name") or ref["id"])) if ref["location"]["type"] == "pool" else (ref.get("name") or ref["id"])
+                raise ValueError("%s %s 无前置点 / has no pre-point (scene derivation failed and no manual mapping) [step %s]" % (what, base, s.get("name") or s["id"]))
+            chosen.append({"where": s.get("name") or s["id"], "station": base, "pre": p, "select": "nearest"})
         locs[s["id"]] = p
         return p
     out = []
     for s in steps:
         if not s.get("enabled", True): continue
         resolve(s)
-    ctx = Ctx(oid, picks, steps, locs, pre_of, roles)
+    ctx = Ctx(oid, picks, steps, locs, pre_of, roles, choose)
     for s in steps:
         if not s.get("enabled", True): continue
+        ctx.step = s
         st = {"id": s["id"], "name": s.get("name") or s["id"], "location": locs[s["id"]], "operation": s.get("operation") or "none",
               "args": substitute(copy.deepcopy(s.get("args") or {}), ctx), "suffix": s.get("blockSuffix") or ("-" + s["id"])}
         vs = s.get("variableShape")
         if s.get("vsOn") and isinstance(vs, dict) and vs.get("head") is not None and vs.get("tail") is not None:
             st["variableShape"] = {"head": float(vs["head"]), "tail": float(vs["tail"])}
         out.append(st)
-    o = {"id": oid, "template": t.get("name"), "picks": dict(picks), "steps": out,
+    o = {"id": oid, "template": t.get("name"), "picks": dict(picks), "steps": out, "preChosen": chosen,
          "priority": int(cfg.get("priority") or 1), "vehicle": cfg.get("vehicle") or "",
          "group": (cfg.get("group") or "").strip(), "label": (cfg.get("label") or "").strip()}
     return o

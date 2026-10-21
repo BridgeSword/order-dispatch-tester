@@ -43,6 +43,20 @@ def parse_scene(js):
         outof = sorted({b for a, b in curves if a == n and b != n}, key=lambda b: dist(b, n))
         cands = [c for c in into if is_lm(c)] or [c for c in outof if is_lm(c)] or into or outof
         p["preCands"] = list(dict.fromkeys(([pre] if pre else []) + cands))
+        # every candidate with direction / distance / LM flag, in default preference order:
+        # property, drive-in LM, drive-out LM, drive-in other, drive-out other (nearest first inside each group)
+        info, seen = [], set()
+        def add(c, d):
+            if c in seen: return
+            seen.add(c); info.append({"name": c, "dir": d, "dist": round(dist(c, n), 3) if dist(c, n) < 1e9 else None, "lm": bool(is_lm(c))})
+        if pre: add(pre, "prop")
+        for c in into:
+            if is_lm(c): add(c, "in")
+        for c in outof:
+            if is_lm(c): add(c, "out")
+        for c in into: add(c, "in")
+        for c in outof: add(c, "out")
+        p["preInfo"] = info
         if not pre and cands: pre = cands[0]; src = "curve-in" if pre in into else "curve-out"
         p["pre"] = pre or ""; p["preSrc"] = src
         p.pop("props", None)
