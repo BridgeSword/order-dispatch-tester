@@ -165,15 +165,44 @@ def restore_scene_cache():
     except Exception as e: log("scene_cache_load_fail", err=str(e))
     return False
 
-def build_geom(refresh=False):
+SCENE_JOB = {}  # the one scene-load job: {id, stage, done, total, t0, t, finished, result}
+
+def start_scene_job(refresh=False):
+    """run build_geom in the background; concurrent callers share the running job"""
+    with lock:
+        j = SCENE_JOB
+        if j and not j.get("finished"): return j["id"]
+        jid = uuid.uuid4().hex[:12]
+        SCENE_JOB.clear(); SCENE_JOB.update(id=jid, stage="request", done=None, total=None, t0=time.time(), t=time.time(), finished=False, result=None)
+    def prog(stage, done=None, total=None):
+        if SCENE_JOB.get("id") != jid: return
+        SCENE_JOB.update(stage=stage, done=done, total=total, t=time.time())
+    def run():
+        try: g = build_geom(refresh=refresh, progress=prog)
+        except Exception as e: g = {"ok": False, "err": str(e)}
+        SCENE_JOB.update(finished=True, result=g, stage="done" if g.get("ok") and not g.get("sceneErr") else "failed", t=time.time())
+    threading.Thread(target=run, daemon=True).start()
+    return jid
+
+def scene_job_status(jid):
+    j = dict(SCENE_JOB)
+    if not j or j.get("id") != jid: return {"ok": False, "err": "unknown job"}
+    j["ok"] = True; j["elapsed"] = round(time.time() - j["t0"], 1)
+    if not j["finished"]: j.pop("result", None)
+    return j
+
+def build_geom(refresh=False, progress=None):
+    prog = progress or (lambda *a, **k: None)
     notes = []; curves, pts, cell = [], [], None; psrc = ""; csrc = ""; stations = []
-    st, js, txt = AD().scene()
+    st, js, txt = AD().scene(progress=prog)
     scene_err = ""
     if js is not None:
       try:
+        prog("parse")
         set_groups(js)
         curves, p0 = AD().extract_geom(js); stations = AD().parse_stations(js)
         csrc = "/scene" if curves else ""
+        prog("pointcloud")
         if p0: pts, cell = rds_scene.downsample(p0); psrc = "/scene normalPosList"
         else: notes.append("/scene: no point cloud (normalPosList)")
       except Exception as e:
@@ -219,6 +248,7 @@ def build_geom(refresh=False):
     g = {"ok": True, "curves": curves, "points": [c for p in pts for c in p], "npoints": len(pts), "cell": cell,
          "bounds": rds_scene.geom_bounds(curves, pts, stations), "stations": stations, "pointSrc": psrc, "curveSrc": csrc, "notes": notes, "sceneErr": scene_err}
     if not scene_err:
+        prog("cache")
         g["loadedAt"] = time.time(); g["groups"] = S.get("groups") or []
         _apply_geom(g); save_scene_cache(g)
     elif not S.get("geom"): S["geom"] = g   # keep the last good scene on failure

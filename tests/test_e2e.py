@@ -48,6 +48,37 @@ class E2ETest(unittest.TestCase):
         self.assertEqual(C.S["prepoints"].get("AP1"), "LM1")
         st = call(self.port, "/api/stations"); self.assertTrue(st["ok"]); self.assertEqual(len(st["stations"]), 24)
 
+    def _run_job(self):
+        self.addCleanup(setattr, fake_rds, "SCENE_DELAY", 0)
+        jid = call(self.port, "/api/scene_geom?refresh=1&async=1")["job"]
+        self.assertEqual(call(self.port, "/api/scene_geom?refresh=1&async=1")["job"], jid)  # concurrent callers share the job
+        seen = []; t0 = time.time()
+        while time.time() - t0 < 15:
+            j = call(self.port, "/api/scene_job?id=" + jid); self.assertTrue(j["ok"])
+            seen.append((j["stage"], j.get("done"), j.get("total")))
+            if j["finished"]: return j, seen
+            self.assertNotIn("result", j); time.sleep(0.05)
+        self.fail("scene job did not finish")
+
+    def test_scene_job_progress_slow_scene(self):
+        fake_rds.SCENE_DELAY = 1.5
+        j, seen = self._run_job()
+        self.assertEqual(j["stage"], "done"); self.assertEqual(len(j["result"]["stations"]), 24); self.assertGreater(j["elapsed"], 1.0)
+        stages = [x[0] for x in seen]; self.assertIn("download", stages)
+        dl = [x for x in seen if x[0] == "download"]
+        self.assertTrue(all(x[2] for x in dl), dl)  # Content-Length known
+        done = [x[1] for x in dl]; self.assertEqual(done, sorted(done)); self.assertLess(done[0], dl[0][2])  # partial progress observed
+        self.assertEqual(len(call(self.port, "/api/scene_geom?cached=1")["stations"]), 24)
+
+    def test_scene_job_progress_no_length_and_failure(self):
+        self.addCleanup(setattr, fake_rds, "SCENE_NOLEN", False); fake_rds.SCENE_NOLEN = True; fake_rds.SCENE_DELAY = 1.0
+        j, seen = self._run_job()
+        self.assertEqual(j["stage"], "done"); dl = [x for x in seen if x[0] == "download"]
+        self.assertTrue(dl and all(x[2] is None for x in dl), dl); self.assertGreater(max(x[1] or 0 for x in dl), 0)
+        self.addCleanup(setattr, fake_rds, "SCENE_FAIL", False); fake_rds.SCENE_FAIL = True; fake_rds.SCENE_DELAY = 0
+        j, _ = self._run_job(); self.assertEqual(j["stage"], "failed"); self.assertIn("500", j["result"]["sceneErr"])
+        self.assertFalse(call(self.port, "/api/scene_job?id=nope")["ok"])
+
     def test_geom_cached_only_and_no_cache_headers(self):
         self.assertFalse(call(self.port, "/api/scene_geom?cached=1")["ok"])
         with urllib.request.urlopen("http://127.0.0.1:%d/" % self.port) as r:

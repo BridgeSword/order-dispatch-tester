@@ -84,10 +84,29 @@ class RdsAdapter(DispatcherAdapter):
         return out
 
     # ------------------------------------------------------------ scene
-    def scene(self):
-        """(status, json-or-None, text). Non-2xx, network errors and non-object JSON count as failure (json None)."""
-        st, js, txt = self.request("GET", "/scene", timeout=90, quiet=True)
-        if st is None or not 200 <= st < 300: return st, None, txt
+    def scene(self, progress=None):
+        """(status, json-or-None, text). Non-2xx, network errors and non-object JSON count as failure (json None).
+        Streams the body so progress("download", bytes, content_length_or_None) can be reported."""
+        prog = progress or (lambda *a, **k: None)
+        url = self.base.rstrip("/") + "/scene"; t0 = time.time(); st = None; txt = ""
+        prog("request")
+        try:
+            with urllib.request.urlopen(url, timeout=90) as r:
+                st = r.status
+                try: total = int(r.headers.get("Content-Length") or 0) or None
+                except ValueError: total = None
+                buf = bytearray(); prog("download", 0, total)
+                while True:
+                    c = r.read1(65536) if hasattr(r, "read1") else r.read(65536)
+                    if not c: break
+                    buf += c; prog("download", len(buf), total)
+                txt = buf.decode("utf-8", "replace")
+        except urllib.error.HTTPError as e: st = e.code; txt = e.read().decode("utf-8", "replace")
+        except Exception as e: txt = "ERR " + str(e)
+        try: js = json.loads(txt)
+        except Exception: js = None
+        if st is None or not 200 <= st < 300:
+            self.log("http", method="GET", url=url, status=st, ms=int((time.time() - t0) * 1000), resp=txt[:2000]); return st, None, txt
         if not isinstance(js, dict): return st, None, "invalid JSON: " + txt[:200]
         return st, js, txt
     def parse_stations(self, scene): return rds_scene.parse_scene(scene)

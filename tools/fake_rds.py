@@ -5,7 +5,7 @@ Orders progress CREATED -> RUNNING -> FINISHED (order ids containing 'fail' go F
 import argparse, io, json, threading, time, zipfile
 from http.server import ThreadingHTTPServer, BaseHTTPRequestHandler
 
-SCENE_DELAY, SCENE_FAIL = 0, False
+SCENE_DELAY, SCENE_FAIL, SCENE_NOLEN = 0, False, False
 
 def scene():
     pts = []; curves = []
@@ -34,6 +34,14 @@ class H(BaseHTTPRequestHandler):
     def do_GET(self):
         p = self.path
         if p == "/scene":
+            if SCENE_DELAY and not SCENE_FAIL:  # slow streamed body, so download progress can be observed
+                b = json.dumps(scene()).encode(); n = 10; self.send_response(200); self.send_header("Content-Type", "application/json")
+                if not SCENE_NOLEN: self.send_header("Content-Length", str(len(b)))
+                else: self.close_connection = True
+                self.end_headers(); time.sleep(SCENE_DELAY / (n + 1))
+                for i in range(n):
+                    self.wfile.write(b[i * len(b) // n:(i + 1) * len(b) // n]); self.wfile.flush(); time.sleep(SCENE_DELAY / (n + 1))
+                return
             time.sleep(SCENE_DELAY)
             if SCENE_FAIL == "badjson":
                 b = b"<html>not json</html>"; self.send_response(200); self.send_header("Content-Length", str(len(b))); self.end_headers(); self.wfile.write(b); return
@@ -72,6 +80,6 @@ def serve(port):
     srv = ThreadingHTTPServer(("127.0.0.1", port), H); threading.Thread(target=srv.serve_forever, daemon=True).start(); return srv
 
 if __name__ == "__main__":
-    ap = argparse.ArgumentParser(); ap.add_argument("--port", type=int, default=18088); ap.add_argument("--scene-delay", type=float, default=0); ap.add_argument("--scene-fail", action="store_true"); a = ap.parse_args()
-    SCENE_DELAY, SCENE_FAIL = a.scene_delay, a.scene_fail
+    ap = argparse.ArgumentParser(); ap.add_argument("--port", type=int, default=18088); ap.add_argument("--scene-delay", type=float, default=0); ap.add_argument("--scene-fail", action="store_true"); ap.add_argument("--scene-nolen", action="store_true"); a = ap.parse_args()
+    SCENE_DELAY, SCENE_FAIL, SCENE_NOLEN = a.scene_delay, a.scene_fail, a.scene_nolen
     print("fake RDS on http://127.0.0.1:%d" % a.port); serve(a.port).serve_forever()

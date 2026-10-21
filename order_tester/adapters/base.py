@@ -52,8 +52,9 @@ class DispatcherAdapter(object):
         raise NotImplementedError
 
     # ---- scene / map (optional)
-    def scene(self):
-        """(status, raw_scene_or_None, text). The raw scene is opaque to the core."""
+    def scene(self, progress=None):
+        """(status, raw_scene_or_None, text). The raw scene is opaque to the core.
+        progress(stage, done=None, total=None) may be called with stage "request" / "download" (bytes)."""
         return None, None, "scene not supported by " + self.name
     def parse_stations(self, scene):
         """[{name, type, x, y, pre, preSrc, preCands, bins}] - 'pre' is the derived pre-point"""

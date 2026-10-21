@@ -40,9 +40,19 @@ function saveCfg(){if(!loaded)return post('/api/config',{base:$('base').value,po
  return post('/api/config',{base:st.base,pollSec:st.pollSec,settings:st})}
 async function loadSt(){saveCfg();let ok=await loadScene(true,false);if(!ok)return;stations=allSt.slice();$('info').textContent=sceneAt();fitAll();renderSt();renderPool();prevLater()}
 function setScene(list){allSt=list||[];stMap={};for(const s of allSt)stMap[s.name]=s}
-let busyN=0;function busy(on){busyN=Math.max(0,busyN+(on?1:-1));const o=$('busy');if(!o)return;if(busyN){$('busytxt').textContent=t('busy.scene');o.classList.add('on');if(document.activeElement)document.activeElement.blur()}else o.classList.remove('on')}
+let busyN=0;function busy(on){busyN=Math.max(0,busyN+(on?1:-1));const o=$('busy');if(!o)return;if(busyN){$('busytxt').textContent=t('busy.scene');o.classList.add('on');if(document.activeElement)document.activeElement.blur()}else{o.classList.remove('on','prog');$('busystage').textContent='';$('busyfill').style.width='0'}}
 document.addEventListener('keydown',e=>{if(busyN){e.preventDefault();e.stopPropagation()}},true);
-async function sceneFetch(url,quiet){busy(true);try{let r=await (await fetch(url)).json();if(r.sceneErr){r.ok=false;r.err=r.sceneErr}if(!r.ok&&!quiet)alert(t('msg.sceneFail')+': '+(r.err||''));return r}catch(e){if(!quiet)alert(t('msg.sceneFail')+': '+e);throw e}finally{busy(false)}}
+const STW={request:[0,5],download:[5,75],parse:[75,85],pointcloud:[85,95],cache:[95,100]};
+const fmtB=n=>n<1e6?Math.round(n/1e3)+' KB':(n/1e6).toFixed(1)+' MB';
+function showProg(s){const o=$('busy'),bar=$('busybar'),fill=$('busyfill');o.classList.add('prog');let w=STW[s.stage]||[0,0],pct=w[0],ind=false,extra='';
+ if(s.stage=='download'){if(s.total){let f=Math.min(1,(s.done||0)/s.total);pct=w[0]+(w[1]-w[0])*f;extra=' '+Math.round(f*100)+'% ('+fmtB(s.done||0)+' / '+fmtB(s.total)+')'}else{ind=true;extra=' '+fmtB(s.done||0)}}
+ else if(s.stage=='request')ind=true;
+ bar.classList.toggle('ind',ind);fill.style.width=pct.toFixed(1)+'%';$('busystage').textContent=t('prog.'+s.stage)+extra+' · '+t('prog.elapsed',{s:Math.round(s.elapsed||0)})}
+async function sceneJob(url){/* background scene load with progress */
+ let j=await (await fetch(url+(url.includes('?')?'&':'?')+'async=1')).json();if(!j.ok||!j.job)return j;
+ let t0=Date.now();for(;;){await new Promise(r=>setTimeout(r,300));let s;try{s=await (await fetch('/api/scene_job?id='+j.job)).json()}catch(e){continue}
+  if(!s.ok)return s;showProg(s);if(s.finished)return s.result||{ok:false,err:'no result'}}}
+async function sceneFetch(url,quiet){busy(true);try{let job=url.startsWith('/api/scene_geom')&&!url.includes('cached=1');let r=job?await sceneJob(url):await (await fetch(url)).json();if(r.sceneErr){r.ok=false;r.err=r.sceneErr}if(!r.ok&&!quiet)alert(t('msg.sceneFail')+': '+(r.err||''));return r}catch(e){if(!quiet)alert(t('msg.sceneFail')+': '+e);throw e}finally{busy(false)}}
 let sceneP=null;
 function sceneAt(){if(!geom||!geom.loadedAt)return '';let d=new Date(geom.loadedAt*1000),p=n=>String(n).padStart(2,'0'),today=new Date().toDateString()==d.toDateString();return t('scene.loadedAt',{t:(today?'':(d.getMonth()+1)+'-'+d.getDate()+' ')+p(d.getHours())+':'+p(d.getMinutes())})+' · '+t('msg.nStations',{n:allSt.length})}
 async function loadScene(refresh,quiet){/* the one scene loader: stations + pre-points + groups + geometry + point cloud */

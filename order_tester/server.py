@@ -44,8 +44,10 @@ class H(BaseHTTPRequestHandler):
             stations, err = C.load_scene_stations()
             if stations is None: return self.send({"ok": False, "err": C.msg("srv.sceneFail", err=err)})
             return self.send({"ok": True, "stations": stations})
+        if path == "/api/scene_job": return self.send(C.scene_job_status(self.q().get("id", "")))
         if path == "/api/scene_geom":
             if "cached=1" in p: return self.send(S.get("geom") or {"ok": False, "none": True})
+            if "async=1" in p: return self.send({"ok": True, "job": C.start_scene_job(refresh="refresh=1" in p)})
             if "refresh=1" in p or not S.get("geom"):
                 try: return self.send(C.build_geom(refresh="refresh=1" in p))
                 except Exception as e: return self.send({"ok": False, "err": str(e)})
