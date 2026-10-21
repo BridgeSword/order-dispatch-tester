@@ -72,6 +72,8 @@ class TemplateTest(unittest.TestCase):
         import glob, os
         files = glob.glob(os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "examples", "templates", "*.json"))
         self.assertTrue(files)
+        # two candidates per station (drive-in LMn, drive-out LMnb) so selector examples can resolve
+        C.S["precands"] = {k: [{"name": v, "dir": "in", "dist": 1.0, "lm": True}, {"name": v + "b", "dir": "out", "dist": 2.0, "lm": True}] for k, v in PREPOINTS.items()}
         for fp in files:
             with open(fp, encoding="utf-8") as f: t = json.load(f)
             self.assertEqual(T.validate(t), [], fp)
