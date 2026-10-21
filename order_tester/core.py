@@ -173,11 +173,38 @@ def save_scene_cache(g):
         os.replace(tmp, P["scene_cache"])
     except Exception as e: log("scene_cache_save_fail", err=str(e))
 
+def backfill_dirs(g, path=None):
+    """old scene cache without station headings: fill 'dir' from the local .smap (no RDS download). Returns count."""
+    try:
+        st0 = load_settings(); cands = [path] if path else [st0.get("smapPath"), st0.get("smapAuto")]
+        fp = next((c for c in cands if c and os.path.isfile(c)), None)
+        if not fp: log("dir_backfill", n=0, note="no local smap"); return 0
+        with open(fp, "rb") as f: raw = f.read()
+        dm = {}
+        for js in AD().decode_map(raw): dm.update({k: v for k, v in rds_scene.point_dirs(js).items() if k not in dm})
+        n = 0
+        with lock:
+            for q in g.get("stations") or []:
+                v = dm.get(q.get("name"))
+                if v is None or isinstance(q.get("dir"), (int, float)): continue
+                q["dir"] = round(v[0], 6); q["dirDeg"] = round(math.degrees(v[0]), 1); q["dirField"] = "dir (smap)"
+                if v[1]: q["ignoreDir"] = True
+                n += 1
+            if n: g["dirSrc"] = "smap: " + os.path.basename(fp)
+        if n and not g.get("sceneErr"): save_scene_cache({k: v for k, v in g.items() if k != "fromCache"})
+        log("dir_backfill", n=n, smap=fp); return n
+    except Exception as e:
+        log("dir_backfill_fail", err=str(e)); return 0
+
 def restore_scene_cache():
     """last successful scene load survives page reloads and server restarts"""
     try:
         with open(P["scene_cache"], encoding="utf-8") as f: g = json.load(f)
-        if isinstance(g, dict) and g.get("ok") and g.get("stations"): g["fromCache"] = True; _apply_geom(g); return True
+        if isinstance(g, dict) and g.get("ok") and g.get("stations"):
+            g["fromCache"] = True; _apply_geom(g)
+            if not any(isinstance(q.get("dir"), (int, float)) for q in g["stations"]):  # cache from before headings were parsed
+                threading.Thread(target=backfill_dirs, args=(g,), daemon=True).start()
+            return True
     except FileNotFoundError: pass
     except Exception as e: log("scene_cache_load_fail", err=str(e))
     return False

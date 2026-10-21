@@ -37,7 +37,7 @@ class PreSelectTest(unittest.TestCase):
     def test_scene_candidates_keep_dir_dist_lm(self):
         info = self.by["AP1"]["preInfo"]
         self.assertEqual([(c["name"], c["dir"], c["lm"]) for c in info],
-                         [("LM1", "in", True), ("LM2", "in", True), ("LM3", "out", True), ("AP9", "in", False)])
+                         [("LM1", "in", True), ("LM2", "in", True), ("LM3", "out", True)])  # AP9 (non-LM) dropped: LMs exist
         self.assertEqual(info[0]["dist"], 1.0); self.assertEqual(info[1]["dist"], 3.0)
         self.assertEqual(self.by["AP1"]["pre"], "LM1")  # default unchanged: nearest drive-in LM
 
@@ -51,7 +51,7 @@ class PreSelectTest(unittest.TestCase):
         self.assertEqual(loc(self.build(tpl("dir", "in"))), "LM1")
         import random
         seen = {loc(self.build(tpl("random"), rng=random.Random(i))) for i in range(40)}
-        self.assertEqual(seen, {"LM1", "LM2", "LM3", "AP9"})
+        self.assertEqual(seen, {"LM1", "LM2", "LM3"})
 
     def test_chosen_recorded_and_same_choice_inside_one_order(self):
         import random
@@ -97,6 +97,31 @@ class PreSelectTest(unittest.TestCase):
         rec = C.make_draft({"start": "AP1"}, t, cfg)
         self.assertEqual(rec["body"]["blocks"][0]["location"], "LM2"); self.assertEqual(rec["preChosen"][0]["select"], "index=2")
 
+class AP140259Test(unittest.TestCase):
+    """Regression from the RIL site (/scene, read-only): AP140259 is linked both ways to LM142652 (0.462 m) and
+    LM140258 (1.665 m) - the two LMs are collinear but not connected - plus an AP-AP link to AP200."""
+    def scene(self):
+        pts = [P("ActionPoint", "AP140259", 27.649, 18.789), P("ActionPoint", "AP200", 28.108, 18.795),
+               P("LocationMark", "LM140258", 25.984, 18.789), P("LocationMark", "LM142652", 27.187, 18.789),
+               P("LocationMark", "LM140253", 24.0, 18.789), P("LocationMark", "LM140263", 25.984, 20.0)]
+        cv = [CV("AP140259", "LM140258"), CV("LM140258", "AP140259"), CV("AP140259", "LM142652"), CV("LM142652", "AP140259"),
+              CV("AP200", "AP140259"), CV("AP200", "LM142078"), CV("LM140253", "LM140258"), CV("LM140258", "LM140263")]
+        return {"scene": {"areas": [{"logicalMap": {"advancedPoints": pts, "advancedCurves": cv}}]}}
+    def test_both_direct_lms_are_candidates(self):
+        fresh_core(self); st = {p["name"]: p for p in rds_scene.parse_scene(self.scene())}
+        p = st["AP140259"]
+        self.assertEqual(p["pre"], "LM142652")  # default unchanged: nearest drive-in LM
+        self.assertEqual([(c["name"], c["dir"], c["dist"], c["src"]) for c in p["preInfo"]],
+                         [("LM142652", "in", 0.462, "curve-in"), ("LM140258", "in", 1.665, "curve-in")])
+        C.S["prepoints"] = {k: v["pre"] for k, v in st.items() if v.get("pre")}; C.S["precands"] = C._precands(list(st.values()))
+        t = {"name": "r", "steps": [{"id": "w", "name": "W", "location": {"type": "pre", "step": "s", "select": "index", "selArg": "2"}, "operation": "Wait", "args": {}},
+                                    {"id": "s", "name": "S", "location": {"type": "pool", "pool": "start"}, "operation": "JackLoad", "args": {}}]}
+        self.assertEqual(T.validate(t), [])
+        o = T.build_order(t, {"start": "AP140259"}, {}, lambda n: C.pre_point(n, {}), "o", cands_of=lambda n: C.pre_cands(n, {}))
+        self.assertEqual(o["steps"][0]["location"], "LM140258")
+        t["steps"][0]["location"].update(select="index", selArg="3")
+        with self.assertRaises(ValueError): T.build_order(t, {"start": "AP140259"}, {}, lambda n: C.pre_point(n, {}), "o", cands_of=lambda n: C.pre_cands(n, {}))
+
 class StationHeadingTest(unittest.TestCase):
     def test_dir_parsed_and_kept(self):
         js = {"scene": {"areas": [{"logicalMap": {"advancedPoints": [
@@ -107,5 +132,33 @@ class StationHeadingTest(unittest.TestCase):
         self.assertEqual((st["B"]["dirDeg"], st["B"]["dirField"]), (-180.0, "angle"))
         self.assertTrue(st["A"]["ignoreDir"]); self.assertNotIn("ignoreDir", st["B"])
         for n in "CDE": self.assertNotIn("dir", st[n], n)
+
+class HeadingBackfillTest(unittest.TestCase):
+    def test_old_cache_gets_dirs_from_local_smap(self):
+        import io, json, os, time, zipfile
+        d = fresh_core(self)
+        smap = {"advancedPointList": [dict(P("ActionPoint", "AP1", 0, 0), dir=1.5707963), P("ActionPoint", "AP2", 1, 0),
+                                      dict(P("LocationMark", "LM1", 2, 0), dir=-1.5707963, ignoreDir=True)]}
+        fp = os.path.join(d, "maps", "rds_x.smap"); os.makedirs(os.path.dirname(fp))
+        bio = io.BytesIO()
+        with zipfile.ZipFile(bio, "w") as z: z.writestr("x.smap", json.dumps(smap))
+        with open(fp, "wb") as f: f.write(bio.getvalue())
+        C.save_settings({"smapAuto": fp})
+        old = {"ok": True, "stations": [{"name": "AP1", "x": 0, "y": 0}, {"name": "AP2", "x": 1, "y": 0}, {"name": "LM1", "x": 2, "y": 0}, {"name": "ZZ", "x": 3, "y": 0}],
+               "curves": [], "points": [], "npoints": 0, "loadedAt": 123.0, "sceneErr": ""}
+        with open(C.P["scene_cache"], "w", encoding="utf-8") as f: json.dump(old, f)
+        C.S.update(geom=None); C.init(d)
+        t0 = time.time()
+        while time.time() - t0 < 5 and not any("dir" in q for q in C.S["geom"]["stations"]): time.sleep(0.02)
+        by = {q["name"]: q for q in C.S["geom"]["stations"]}
+        self.assertEqual(by["AP1"]["dirDeg"], 90.0); self.assertEqual(by["AP2"]["dir"], 0.0)  # omitted in map = heading 0
+        self.assertEqual(by["LM1"]["dirDeg"], -90.0); self.assertTrue(by["LM1"]["ignoreDir"]); self.assertNotIn("dir", by["ZZ"])
+        time.sleep(0.2)
+        with open(C.P["scene_cache"], encoding="utf-8") as f: saved = json.load(f)
+        self.assertEqual({q["name"]: q.get("dirDeg") for q in saved["stations"]}["AP1"], 90.0); self.assertEqual(saved["loadedAt"], 123.0)
+        self.assertIn("rds_x.smap", saved["dirSrc"]); self.assertNotIn("fromCache", saved)
+
+    def test_no_local_smap_is_harmless(self):
+        fresh_core(self); self.assertEqual(C.backfill_dirs({"stations": [{"name": "A"}]}), 0)
 
 if __name__ == "__main__": unittest.main()

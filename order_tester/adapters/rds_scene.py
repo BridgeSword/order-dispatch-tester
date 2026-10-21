@@ -62,8 +62,10 @@ def parse_scene(js):
             if is_lm(c): add(c, "in")
         for c in outof:
             if is_lm(c): add(c, "out")
-        for c in into: add(c, "in")
-        for c in outof: add(c, "out")
+        if not info:  # non-LM neighbours (e.g. an AP-AP link) only when there is no LM candidate at all
+            for c in into: add(c, "in")
+            for c in outof: add(c, "out")
+        for c in info: c["src"] = "property" if c["dir"] == "prop" else ("curve-in" if c["dir"] == "in" else "curve-out")
         p["preInfo"] = info
         if not pre and cands: pre = cands[0]; src = "curve-in" if pre in into else "curve-out"
         p["pre"] = pre or ""; p["preSrc"] = src
@@ -121,6 +123,22 @@ def extract_geom(js, points_only=False):
             for v in o: walk(v)
     walk(js)
     return curves, pts
+
+def point_dirs(js):
+    """{point name: (dir radians, ignoreDir)} from a scene/.smap JSON. A map point without 'dir' has heading 0
+    (the field is omitted when 0), so every point found gets a value."""
+    out = {}
+    def walk(o):
+        if isinstance(o, dict):
+            n = o.get("instanceName")
+            if n and o.get("className") and isinstance(o.get("pos"), dict) and not isinstance(o.get("startPos"), dict) and n not in out:
+                v = next((o[k] for k in ANGLE_KEYS if isinstance(o.get(k), (int, float)) and not isinstance(o.get(k), bool)), 0.0)
+                out[n] = (float(v), o.get("ignoreDir") is True)
+            for v in o.values(): walk(v)
+        elif isinstance(o, list):
+            for v in o: walk(v)
+    walk(js)
+    return out
 
 def downsample(pts, maxn=200000):
     cell = 0.05

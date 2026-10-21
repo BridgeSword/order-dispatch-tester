@@ -68,6 +68,7 @@ function preOvParse(){/* same rules as server parse_pre_text: STATION=PRE or STA
  let m={},errs=[];$('pre_ov').value.split(/\n/).forEach((raw,k)=>{let l=raw.split('#')[0].trim();if(!l)return;let x=l.match(/^([^\s=:|,，]+)\s*(?:[=:]\s*|[\s,，]+)(.*?)\s*$/),v=x?x[2].split('|').map(s=>s.trim()):[];
   if(!x||!v.length||v.some(s=>!/^[^\s=:|,，]+$/.test(s))){errs.push(t('srv.preLineBad',{n:k+1,line:raw.trim()}));return}if(m[x[1]]){errs.push(t('srv.preLineDup',{n:k+1,st:x[1]}));return}m[x[1]]=[...new Set(v)]});return {m,errs}}
 function preOv(){let r=preOvParse().m,o={};for(const k in r)o[k]=r[k][0];return o}
+function preAll(n){/* every candidate pre-point (manual list, else scene list); [0] = default */let m=preOvParse().m[n];if(m&&m.length)return m;let s=stMap[n]||stations.find(x=>x.name==n)||{};let c=(s.preInfo||[]).map(x=>x.name);if(!c.length&&s.preCands)c=s.preCands;if(!c.length&&s.pre)c=[s.pre];return c}
 function preOf(n){let o=preOv();/* default (nearest) pre-point */if(o[n])return o[n];let s=stMap[n]||stations.find(x=>x.name==n);return s&&s.pre||''}
 function pmRole(){let r=document.querySelector('input[name=pm]:checked');return r?r.value:pmSaved}
 function pick(n,role){role=role||pmRole();let a=pools[role]||(pools[role]=[]);let i=a.indexOf(n);i>=0?a.splice(i,1):a.push(n);renderPool();renderSt();prevLater()}
@@ -123,7 +124,7 @@ function renderPool(){renderPools();setTimeout(renderSum,0);if($('cnt_auto').val
  let need=needRoles();
  if(!allSt.length&&roles.some(r=>(pools[r]||[]).length)){$('pre_info').innerHTML=`<span class=dim>${t('pre.loading')}</span>`;draw();return}
  $('pre_info').innerHTML=roles.map(r=>{let a=pools[r]||[],miss=a.filter(e=>!preOf(e));
-  return `<b>${t('pre.of')} · ${esc(plab(r))}</b>: `+a.map(e=>esc(e)+'→'+(esc(preOf(e))||`<b style=color:${need.has(r)?'red':'#a60'}>${t('pre.none')}</b>`)).join(' ')+
+  return `<b>${t('pre.of')} · ${esc(plab(r))}</b>: `+a.map(e=>{let al=preAll(e);return esc(e)+'→'+(al.length?'<b>'+esc(al[0])+'</b>'+(al.length>1?'<span class=dim>/'+al.slice(1).map(esc).join('/')+'</span>':''):`<b style=color:${need.has(r)?'red':'#a60'}>${t('pre.none')}</b>`)}).join(' ')+
   (miss.length?(need.has(r)?`<br><b style=color:red>${t('pre.missNeeded')}: ${esc(miss.join(', '))}</b>`:`<br><span style=color:#a60>⚠ ${t('pre.missUnneeded')}: ${esc(miss.join(', '))}</span>`):'')}).join('<br>');draw()}
 // pools whose stations need a pre-point (an enabled 'pre' step derives from them)
 function stepRef(S,id){let s=S.find(x=>x.id==id);if(s)return s;let m=/^(?:step)?(\d+)$/.exec(id||'');return m?S[+m[1]-1]||null:null}
@@ -251,11 +252,11 @@ function drawHeadings(){/* station heading arrows (scene 'dir', radians); statio
 function hoverSt(e){if(!$('ly_st').checked){C.title='';return}let best=null,bd=144;for(const s of (allSt.length?allSt:stations)){if(s.x==null)continue;let d=(tx(s.x)-e.offsetX)**2+(ty(s.y)-e.offsetY)**2;if(d<bd){bd=d;best=s}}
  let tt=best?best.name+' ('+best.type+')'+(typeof best.dir=='number'?' · '+t('map.angle')+' '+(best.dirDeg!=null?best.dirDeg:(best.dir*180/Math.PI).toFixed(1))+'°'+(best.ignoreDir?' ('+t('map.ignoreDir')+')':''):''):'';if(C.title!==tt)C.title=tt}
 function drawStations(){let pn=poolNames(),inP={},pre={};
- for(const r of pn)for(const n of pools[r]||[]){(inP[n]=inP[n]||[]).push(r);let p=preOf(n);if(p){pre[p]=pre[p]||{};(pre[p][r]=pre[p][r]||[]).push(n)}}
+ let alt={};for(const r of pn)for(const n of pools[r]||[]){(inP[n]=inP[n]||[]).push(r);preAll(n).forEach((p,i)=>{pre[p]=pre[p]||{};(pre[p][r]=pre[p][r]||[]).push(n);if(i)alt[p+'|'+n]=1})}
  for(const s of (allSt.length?allSt:stations)){if(s.x==null||inP[s.name]||pre[s.name])continue;
   X.fillStyle=(s.type.includes('Action')||s.name.startsWith('AP'))?'#06c':'#999';X.beginPath();X.arc(tx(s.x),ty(s.y),3,0,7);X.fill();if(view.s>15){X.fillStyle='#333';X.fillText(s.name,tx(s.x)+4,ty(s.y)-4)}}
  X.save();X.setLineDash([4,3]);X.lineWidth=1.2;
- for(const p in pre){let a=stPos(p);if(!a)continue;for(const r in pre[p])for(const n of pre[p][r]){let b=stPos(n);if(!b)continue;X.strokeStyle=pcol(r);X.globalAlpha=.7;X.beginPath();X.moveTo(tx(a.x),ty(a.y));X.lineTo(tx(b.x),ty(b.y));X.stroke()}}
+ for(const p in pre){let a=stPos(p);if(!a)continue;for(const r in pre[p])for(const n of pre[p][r]){let b=stPos(n);if(!b)continue;X.strokeStyle=pcol(r);X.globalAlpha=alt[p+'|'+n]?.3:.7;X.beginPath();X.moveTo(tx(a.x),ty(a.y));X.lineTo(tx(b.x),ty(b.y));X.stroke()}}
  X.restore();
  for(const p in pre){if(inP[p])continue;let a=stPos(p);if(!a)continue;let rs=Object.keys(pre[p]),multi=rs.length>1;
   dot(tx(a.x),ty(a.y),4.5,light(pcol(rs[0])),multi?light(pcol(rs[1])):null,multi?RING:pcol(rs[0]));lbl(p,tx(a.x)+6,ty(a.y)+13,multi?RING:pcol(rs[0]))}
