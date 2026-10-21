@@ -1,0 +1,11 @@
+{
+ "name": "two_stage_pick_drop",
+ "title": "Example: pick at start, drop at end, no pre-points / scripts",
+ "version": 1,
+ "steps": [
+  {"id": "s", "name": "Pick", "enabled": true, "location": {"type": "pool", "pool": "start"}, "operation": "ForkLoad",
+   "args": {"start_height": 0.09, "end_height": 0.2, "recognize": true, "recfile": "plt/example.plt"}, "vsOn": false},
+  {"id": "e", "name": "Drop", "enabled": true, "location": {"type": "pool", "pool": "end"}, "operation": "ForkUnload",
+   "args": {"start_height": 0.2, "end_height": 0.09, "recognize": false}, "vsOn": true, "variableShape": {"head": 1.5, "tail": 1.5}}
+ ]
+}

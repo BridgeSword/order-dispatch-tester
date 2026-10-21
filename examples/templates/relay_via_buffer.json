@@ -1,0 +1,13 @@
+{
+ "name": "relay_via_buffer",
+ "title": "Example: start -> buffer pool -> end, waits at the buffer's pre-point, fixed parking at the end",
+ "version": 1,
+ "steps": [
+  {"id": "s", "name": "Pick", "location": {"type": "pool", "pool": "start"}, "operation": "ForkLoad", "args": {"end_height": 0.2}},
+  {"id": "bpre", "name": "BufferPre", "location": {"type": "pre", "step": "b"}, "operation": "Wait", "args": {}},
+  {"id": "b", "name": "Buffer", "location": {"type": "pool", "pool": "buffer"}, "operation": "ForkUnload", "args": {"end_height": 0.09}},
+  {"id": "b2", "name": "Repick", "location": {"type": "pool", "pool": "buffer"}, "operation": "ForkLoad", "args": {"end_height": 0.2, "note": "same station as {stationOf:b}"}},
+  {"id": "e", "name": "Drop", "location": {"type": "pool", "pool": "end"}, "operation": "ForkUnload", "args": {"end_height": 0.09}},
+  {"id": "park", "name": "Park", "enabled": false, "location": {"type": "fixed", "station": "PARK-PLACEHOLDER"}, "operation": "none", "args": {}}
+ ]
+}

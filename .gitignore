@@ -1,0 +1,18 @@
+# runtime data (never commit)
+settings.json
+settings.json.*
+drafts.json
+sent_orders.json
+*.tmp
+/logs/
+/maps/
+/templates/
+pointcloud_cache.json
+*.bak*
+# caches
+__pycache__/
+*.py[cod]
+.pytest_cache/
+node_modules/
+.DS_Store
+Thumbs.db
