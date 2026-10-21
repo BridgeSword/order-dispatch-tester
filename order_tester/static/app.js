@@ -82,14 +82,17 @@ function chipClick(e){let c=e.target.closest('.chip');if(!c)return;let n=c.datas
  if(e.target.tagName=='I'){let a=pools[r]||[],i=a.indexOf(n);if(i>=0)a.splice(i,1);renderPool();renderSt();saveNow();prevLater();return}
  hlSt.has(n)?hlSt.delete(n):hlSt.add(n);renderPool();draw()}
 function renderPools(){let pn=poolNames(),used=(cur&&cur.pools)||[];
- $('pools').innerHTML=pn.map(r=>`<div class=poolrow><span class=pn style="color:${pcol(r)}">${esc(plab(r))}</span> <span class=dim>(${(pools[r]||[]).length})</span>${used.includes(r)?'':` <span class=dim>${t('pool.unused')}</span>`}: <span class=chips data-r="${esc(r)}">${chips(pools[r]||[],r)}</span> <button onclick="clearPool('${r}')">${t('btn.clear')}</button>${r=='start'||r=='end'?'':` <button onclick="delPool('${r}')">${t('pool.del')}</button>`}</div>`).join('');
+ $('pools').innerHTML=pn.map(r=>`<div class=poolrow><span class=pn style="color:${pcol(r)}">${esc(plab(r))}</span> <span class=dim>(${(pools[r]||[]).length})</span>${used.includes(r)?'':` <span class=dim>${t('pool.unused')}</span>`}: <span class=chips data-r="${esc(r)}">${chips(pools[r]||[],r)}</span> <button onclick="clearPool('${r}')">${t('btn.clear')}</button>${r=='start'||r=='end'?'':` <button onclick="renamePool('${r}')">${t('pool.rename')}</button> <button onclick="delPool('${r}')">${t('pool.del')}</button>`}</div>`).join('');
  document.querySelectorAll('#pools .chips').forEach(e=>e.onclick=chipClick);
  for(const s of ['swa','swb']){let e=$(s),v=e.value;e.innerHTML=pn.map(r=>`<option value="${esc(r)}">${esc(plab(r))}</option>`).join('');e.value=pn.includes(v)?v:(s=='swa'?pn[0]:pn[1]||pn[0])}
  let pm=pmRole();$('pm_box').innerHTML=pn.map(r=>`<label><input type=radio name=pm value="${esc(r)}" ${r==pm?'checked':''} onchange=saveLater()>${t('map.pickFor',{p:esc(plab(r))})}</label>`).join('');
  if(!document.querySelector('input[name=pm]:checked')&&pn.length)document.querySelector('input[name=pm]').checked=true}
 function clearPool(r){pools[r]=[];renderPool();renderSt();saveNow();prevLater()}
-function delPool(r){if(!confirm(t('pool.delQ',{p:r})))return;delete pools[r];renderPool();renderSt();saveNow()}
-function addPool(){let n=$('newpool').value.trim();if(!/^[A-Za-z_][\w]*$/.test(n)){alert(t('pool.badName'));return}if(!pools[n])pools[n]=[];$('newpool').value='';renderPool();renderSt();saveNow()}
+function delPool(r){if(!confirm(t('pool.delQ',{p:r})))return;delete pools[r];renderPool();renderSt();refreshStepPools();saveNow()}
+function renamePool(r){let n=prompt(t('pool.renameQ',{p:r}),r);if(n==null)return;n=n.trim();if(n==r)return;if(!/^[A-Za-z_][\w]*$/.test(n)){alert(t('pool.badName'));return}if(pools[n]){alert(t('pool.exists',{p:n}));return}
+ let np={};for(const k of Object.keys(pools))np[k==r?n:k]=pools[k];pools=np;let ch=false;if(cur)for(const s of cur.steps)if(s.location&&s.location.type=='pool'&&s.location.pool==r){s.location.pool=n;ch=true}
+ renderSteps();if(ch)tplChanged();renderPool();renderSt();saveNow()}
+function addPool(){let n=$('newpool').value.trim();if(!/^[A-Za-z_][\w]*$/.test(n)){alert(t('pool.badName'));return}if(!pools[n])pools[n]=[];$('newpool').value='';renderPool();renderSt();refreshStepPools();saveNow()}
 function stratCount(){let roles=(cur&&cur.pools)||[],sz=roles.map(r=>(pools[r]||[]).length),s=$('strategy').value;if(!sz.length)return 0;
  if(s=='cartesian'){let ns=$('noself').checked,c=0,tot=sz.reduce((a,b)=>a*b,1);if(tot>200000)return tot;const rec=(i,used)=>{if(i==roles.length){c++;return}for(const x of pools[roles[i]]||[]){if(ns&&used.includes(x))continue;rec(i+1,used.concat([x]))}};rec(0,[]);return c}
  if(s=='round_robin')return Math.max(...sz);return sz[0]}
@@ -134,22 +137,28 @@ function rawChanged(){let v;try{v=JSON.parse($('tpl_json').value)}catch(e){tplSt
 const OPS=['Wait','ForkLoad','ForkUnload','ForkHeight','Script','JackLoad','JackUnload','none'];
 function locCell(s,i){let L=s.location,ty=L.type,pn=poolNames(),opts=cur.steps.map((x,j)=>j==i?'':`<option value="${esc(x.id)}" ${L.step==x.id?'selected':''}>${j+1}. ${esc(x.name||x.id)}</option>`).join('');
  return `<select class=loctype onchange="setLoc(${i},'type',this.value)">${['pool','pre','fixed'].map(x=>`<option value=${x} ${ty==x?'selected':''}>${t('loc.'+x)}</option>`).join('')}</select><br>`+
- (ty=='pool'?`<input class=locpool list=dl_pools size=9 value="${esc(L.pool||'')}" onchange="setLoc(${i},'pool',this.value)">`:
+ (ty=='pool'?poolSelect(L.pool,i):
   ty=='pre'?`<select class=locstep onchange="setLoc(${i},'step',this.value)"><option value="">-</option>${opts}</select>`:`<input class=locfixed size=10 value="${esc(L.station||'')}" placeholder="LM1" onchange="setLoc(${i},'station',this.value)">`)}
-function renderSteps(){let tb=$('steps').tBodies[0];tb.innerHTML='';cur.steps.forEach((s,i)=>{let tr=document.createElement('tr');tr.className=s.enabled===false?'off':'';tr.dataset.i=i;
+// pool dropdown for a 'pool' step: every existing pool (display names) + the step's own value if it is not a pool yet.
+// (was <input list=datalist>: browsers filter datalist suggestions by the current value, so only 'start' was offered)
+function poolSelect(v,i){let pn=poolNames();if(v&&!pn.includes(v))pn=pn.concat([v]);
+ return `<select class=locpool onchange="setLoc(${i},'pool',this.value)">${pn.map(r=>`<option value="${esc(r)}" ${r==v?'selected':''}>${esc(plab(r))}${r!='start'&&r!='end'||plab(r)==r?'':' ('+r+')'}</option>`).join('')}</select>`}
+// re-render the step table only when the pool list changed and no step control has focus (never clobber an open dropdown/input)
+let stepPoolSig='';function refreshStepPools(){let sig=poolNames().join('|');if(sig===stepPoolSig)return;
+ let a=document.activeElement;if(a&&a.closest&&a.closest('#steps')){setTimeout(refreshStepPools,500);return}if(cur)renderSteps()}
+function renderSteps(){stepPoolSig=poolNames().join('|');let tb=$('steps').tBodies[0];tb.innerHTML='';cur.steps.forEach((s,i)=>{let tr=document.createElement('tr');tr.className=s.enabled===false?'off':'';tr.dataset.i=i;
  let vs=s.variableShape||{head:1.539,tail:1.539};
  tr.innerHTML=`<td><span class=hdl draggable=true title="${t('step.drag')}">☰</span><br><button class=up onclick=mvStep(${i},-1) ${i?'':'disabled'}>↑</button><button class=down onclick=mvStep(${i},1) ${i<cur.steps.length-1?'':'disabled'}>↓</button></td><td>${i+1}</td>
  <td><input type=checkbox class=sten ${s.enabled===false?'':'checked'} onchange="setF(${i},'enabled',this.checked)"></td>
  <td><input class=stid size=6 value="${esc(s.id)}" onchange="setF(${i},'id',this.value.trim())"><br><span class=dim title="${t('step.suffixTip')}">${t('step.suffix')}</span><input size=8 value="${esc(s.blockSuffix||'')}" placeholder="-${esc(s.id)}" onchange="setF(${i},'blockSuffix',this.value.trim())"></td>
  <td><input class=stname size=9 value="${esc(s.name||'')}" onchange="setF(${i},'name',this.value)"></td><td>${locCell(s,i)}</td>
- <td><input class=stop list=dl_ops size=10 value="${esc(s.operation||'none')}" onchange="setF(${i},'operation',this.value.trim()||'none')"></td>
+ <td><input class=stop list=dl_ops size=10 value="${esc(s.operation||'none')}" onfocus="this.placeholder=this.value;this.value=''" onblur="if(!this.value)this.value=this.placeholder" onchange="if(this.value.trim())setF(${i},'operation',this.value.trim())"></td>
  <td><textarea class=stargs rows=3 onchange="setArgs(${i},this)">${esc(JSON.stringify(s.args||{}))}</textarea><span class="err argerr"></span></td>
  <td><label><input type=checkbox class=stvs ${s.vsOn?'checked':''} onchange="setVs(${i},'on',this.checked)">${t('step.vsOn')}</label><br><input type=number step=0.001 value="${vs.head}" onchange="setVs(${i},'head',this.value)"> <input type=number step=0.001 value="${vs.tail}" onchange="setVs(${i},'tail',this.value)"></td>
  <td><button class=rm onclick=rmStep(${i}) title="${t('btn.del')}">✕</button></td>`;
  tr.querySelector('.hdl').addEventListener('dragstart',e=>{e.dataTransfer.setData('text/plain',String(i));e.dataTransfer.effectAllowed='move'});
  tr.addEventListener('dragover',e=>{e.preventDefault();tr.classList.add('drag')});tr.addEventListener('dragleave',()=>tr.classList.remove('drag'));
  tr.addEventListener('drop',e=>{e.preventDefault();tr.classList.remove('drag');moveStep(parseInt(e.dataTransfer.getData('text/plain')),i)});tb.appendChild(tr)});
- let dp=$('dl_pools')||document.body.appendChild(Object.assign(document.createElement('datalist'),{id:'dl_pools'}));dp.innerHTML=poolNames().map(r=>`<option value="${esc(r)}">`).join('');
  if(!$('dl_ops')){let d=document.createElement('datalist');d.id='dl_ops';d.innerHTML=OPS.map(o=>`<option value="${o}">`).join('');document.body.appendChild(d)}}
 function setF(i,k,v){let s=cur.steps[i];if(k=='id'){let old=s.id;if(!v||cur.steps.some((x,j)=>j!=i&&x.id==v)){alert(t('step.dupId'));renderSteps();return}cur.steps.forEach(x=>{if(x.location.type=='pre'&&x.location.step==old)x.location.step=v})}
  if(k=='blockSuffix'&&!v)delete s.blockSuffix;else s[k]=v;renderSteps();tplChanged()}

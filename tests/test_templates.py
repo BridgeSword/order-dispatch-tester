@@ -89,3 +89,22 @@ class AdapterInterfaceTest(unittest.TestCase):
         with self.assertRaises(ValueError): get_adapter("vda5050", "x")
 
 if __name__ == "__main__": unittest.main()
+
+class CustomPoolTemplateTest(unittest.TestCase):
+    """Template like Ross's RIL-L: two fixed-station steps + one step on a custom pool."""
+    def test_fixed_plus_custom_pool(self):
+        fresh_core(self); C.S["prepoints"] = dict(PREPOINTS)
+        t = {"name": "RIL-L", "steps": [
+            {"id": "s", "location": {"type": "fixed", "station": "AP5"}, "operation": "JackLoad", "args": {}},
+            {"id": "e", "location": {"type": "fixed", "station": "LM6"}, "operation": "JackUnload", "args": {}},
+            {"id": "step1", "location": {"type": "pool", "pool": "STP"}, "operation": "Wait", "args": {}}]}
+        C.S["store"].put(t); t = C.S["store"].get("RIL-L")
+        self.assertEqual(t["pools"], ["STP"])
+        b, tt, pools, warn, err = C.prepare_cfg({"templateName": "RIL-L", "pools": {"start": [], "end": [], "STP": ["AP7", "AP8"]}})
+        self.assertEqual(err, ""); self.assertEqual(pools, {"STP": ["AP7", "AP8"]})
+        res = C.generate_drafts(dict(b, count=None), tt, pools)
+        self.assertEqual(res["n"], 2)  # default count = size of the template's first pool (STP)
+        locs = sorted(C.S["orders"][i]["body"]["blocks"][2]["location"] for i in res["ids"])
+        self.assertEqual(locs, ["AP7", "AP8"])
+        b2, _, _, _, err2 = C.prepare_cfg({"templateName": "RIL-L", "pools": {"start": ["AP1"]}})
+        self.assertIn("STP", err2)  # empty template pool is reported even if start is filled

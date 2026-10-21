@@ -14,6 +14,7 @@ D = {
  "pool.legend": ("站点池", "Station pools"), "pool.start": ("起点", "start"), "pool.end": ("终点", "end"), "pool.add": ("新建站点池", "New pool"),
  "pool.swap": ("互换", "Swap"), "pool.chipHint": ("点 × 删除单个点; 点芯片在地图上高亮该站点", "click × to remove a station; click a chip to highlight it on the map"),
  "pool.empty": ("(空)", "(empty)"), "pool.unused": ("(当前模板未使用)", "(not used by the template)"), "pool.del": ("删除池", "Delete pool"),
+ "pool.rename": ("改名", "Rename"), "pool.renameQ": ("站点池 {p} 的新名称", "New name for pool {p}"), "pool.exists": ("站点池 {p} 已存在", "Pool {p} already exists"),
  "pool.delQ": ("删除站点池 {p}？", "Delete pool {p}?"), "pool.badName": ("池名只能用字母/数字/下划线, 且不能以数字开头", "Pool name: letters, digits, underscore; must not start with a digit"),
  "gen.strategy": ("生成策略", "Strategy"), "gen.random": ("随机 (不重复)", "Random (no reuse)"), "gen.rr": ("轮询 (round-robin)", "Round-robin"), "gen.cart": ("全组合 (笛卡尔积)", "Cartesian product"),
  "gen.noself": ("同一单内站点不重复 (排除起终点相同)", "No repeated station within an order"),
