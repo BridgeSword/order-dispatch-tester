@@ -85,7 +85,11 @@ class RdsAdapter(DispatcherAdapter):
 
     # ------------------------------------------------------------ scene
     def scene(self):
-        return self.request("GET", "/scene", timeout=90, quiet=True)
+        """(status, json-or-None, text). Non-2xx, network errors and non-object JSON count as failure (json None)."""
+        st, js, txt = self.request("GET", "/scene", timeout=90, quiet=True)
+        if st is None or not 200 <= st < 300: return st, None, txt
+        if not isinstance(js, dict): return st, None, "invalid JSON: " + txt[:200]
+        return st, js, txt
     def parse_stations(self, scene): return rds_scene.parse_scene(scene)
     def parse_groups(self, scene): return rds_scene.parse_groups(scene)
     def extract_geom(self, scene): return rds_scene.extract_geom(scene)

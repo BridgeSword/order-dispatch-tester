@@ -22,6 +22,24 @@ class E2ETest(unittest.TestCase):
         self.addCleanup(self.srv.shutdown); self.addCleanup(self.rds.shutdown)
         fake_rds.ORDERS.clear(); del fake_rds.RECEIVED[:]
 
+    def test_scene_failure_is_error(self):
+        self.addCleanup(setattr, fake_rds, "SCENE_FAIL", False)
+        for mode, frag in ((True, "500"), ("badjson", "invalid JSON")):
+            fake_rds.SCENE_FAIL = mode; C.S.pop("st_cache", None)
+            r = call(self.port, "/api/stations?refresh=1")
+            self.assertFalse(r["ok"], (mode, r)); self.assertIn(frag, r["err"])
+            g = call(self.port, "/api/scene_geom?refresh=1"); self.assertIn(frag, g["sceneErr"]); self.assertEqual(g["stations"], [])
+        fake_rds.SCENE_FAIL = False
+        g = call(self.port, "/api/scene_geom?refresh=1"); self.assertEqual(g["sceneErr"], ""); self.assertEqual(len(g["stations"]), 24)
+        self.assertEqual(len(call(self.port, "/api/scene_geom?cached=1")["stations"]), 24)
+        r = call(self.port, "/api/stations?refresh=1"); self.assertTrue(r["ok"]); self.assertEqual(len(r["stations"]), 24)
+
+    def test_geom_cached_only_and_no_cache_headers(self):
+        self.assertFalse(call(self.port, "/api/scene_geom?cached=1")["ok"])
+        with urllib.request.urlopen("http://127.0.0.1:%d/" % self.port) as r:
+            self.assertEqual(r.headers["Cache-Control"], "no-store"); self.assertRegex(r.read().decode(), r'/static/app\.js\?v=\d+"')
+        with urllib.request.urlopen("http://127.0.0.1:%d/static/app.js" % self.port) as r: self.assertEqual(r.headers["Cache-Control"], "no-store")
+
     def test_full_flow(self):
         p = self.port
         self.assertIn(b"app.js", call(p, "/")); self.assertIn(b"loadI18n", call(p, "/static/app.js"))

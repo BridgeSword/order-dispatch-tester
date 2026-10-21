@@ -23,14 +23,17 @@ class H(BaseHTTPRequestHandler):
     def do_GET(self):
         p = self.path; path = urllib.parse.urlparse(p).path
         if path in ("/", "/index.html"):
-            with open(os.path.join(STATIC, "index.html"), "rb") as f: return self.send(f.read(), ctype="text/html; charset=utf-8", extra={"Cache-Control": "no-cache"})
+            with open(os.path.join(STATIC, "index.html"), "rb") as f: html = f.read()
+            v = str(int(max(os.path.getmtime(os.path.join(STATIC, n)) for n in os.listdir(STATIC))))
+            html = html.replace(b'/static/app.js"', b'/static/app.js?v=' + v.encode() + b'"')
+            return self.send(html, ctype="text/html; charset=utf-8", extra={"Cache-Control": "no-store"})
         if path == "/favicon.ico": return self.send(b"", 204, ctype="image/x-icon")
         if path.startswith("/static/"):
             fn = os.path.basename(path)
             fp = os.path.join(STATIC, fn)
             if fn and os.path.isfile(fp):
                 ct = {"js": "application/javascript", "css": "text/css", "html": "text/html"}.get(fn.rsplit(".", 1)[-1], "application/octet-stream")
-                with open(fp, "rb") as f: return self.send(f.read(), ctype=ct + "; charset=utf-8", extra={"Cache-Control": "no-cache"})
+                with open(fp, "rb") as f: return self.send(f.read(), ctype=ct + "; charset=utf-8", extra={"Cache-Control": "no-store"})
             return self.send({"err": "not found"}, 404)
         if path == "/api/i18n":
             lang = self.q().get("lang") or C.load_settings().get("lang") or "zh"
@@ -42,6 +45,7 @@ class H(BaseHTTPRequestHandler):
             if stations is None: return self.send({"ok": False, "err": C.msg("srv.sceneFail", err=err)})
             return self.send({"ok": True, "stations": stations})
         if path == "/api/scene_geom":
+            if "cached=1" in p: return self.send(S.get("geom") or {"ok": False, "none": True})
             if "refresh=1" in p or not S.get("geom"):
                 try: return self.send(C.build_geom(refresh="refresh=1" in p))
                 except Exception as e: return self.send({"ok": False, "err": str(e)})

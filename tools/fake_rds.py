@@ -35,6 +35,8 @@ class H(BaseHTTPRequestHandler):
         p = self.path
         if p == "/scene":
             time.sleep(SCENE_DELAY)
+            if SCENE_FAIL == "badjson":
+                b = b"<html>not json</html>"; self.send_response(200); self.send_header("Content-Length", str(len(b))); self.end_headers(); self.wfile.write(b); return
             if SCENE_FAIL: return self.js({"err": "fake scene failure"}, 500)
             return self.js(scene())
         if p == "/downloadScene": self.send_response(404); self.end_headers(); return

@@ -109,7 +109,9 @@ def set_groups(js):
 def load_scene_stations():
     st, js, txt = AD().scene()
     if js is None: return None, "/scene %s %s" % (st, txt[:200])
-    set_groups(js); stations = AD().parse_stations(js); S["st_cache"] = (time.time(), stations)
+    try: set_groups(js); stations = AD().parse_stations(js)
+    except Exception as e: return None, "/scene parse error: %s" % e
+    S["st_cache"] = (time.time(), stations)
     with lock: S["prepoints"] = {p["name"]: p["pre"] for p in stations if p.get("pre")}
     return stations, ""
 
@@ -140,13 +142,17 @@ def load_smap(path):
 def build_geom(refresh=False):
     notes = []; curves, pts, cell = [], [], None; psrc = ""; csrc = ""; stations = []
     st, js, txt = AD().scene()
+    scene_err = ""
     if js is not None:
+      try:
         set_groups(js)
         curves, p0 = AD().extract_geom(js); stations = AD().parse_stations(js)
         csrc = "/scene" if curves else ""
         if p0: pts, cell = rds_scene.downsample(p0); psrc = "/scene normalPosList"
         else: notes.append("/scene: no point cloud (normalPosList)")
-    else: notes.append("/scene failed: %s %s" % (st, txt[:120]))
+      except Exception as e:
+        scene_err = "/scene parse error: %s" % e; js = None; curves, stations = [], []; notes.append(scene_err)
+    else: scene_err = "/scene %s %s" % (st, txt[:200]); notes.append("/scene failed: %s %s" % (st, txt[:120]))
     smap = load_settings().get("smapPath")
     if not pts and smap:
         if os.path.isfile(smap):
@@ -185,7 +191,7 @@ def build_geom(refresh=False):
         else: notes.append("/downloadScene unavailable (HTTP %s)" % code)
     if not pts: notes.append("no point cloud: upload a .smap or set a local smap path on the Map tab")
     g = {"ok": True, "curves": curves, "points": [c for p in pts for c in p], "npoints": len(pts), "cell": cell,
-         "bounds": rds_scene.geom_bounds(curves, pts, stations), "stations": stations, "pointSrc": psrc, "curveSrc": csrc, "notes": notes}
+         "bounds": rds_scene.geom_bounds(curves, pts, stations), "stations": stations, "pointSrc": psrc, "curveSrc": csrc, "notes": notes, "sceneErr": scene_err}
     with lock:
         S["geom"] = g
         if stations: S["prepoints"] = {q["name"]: q["pre"] for q in stations if q.get("pre")}; S["st_cache"] = (time.time(), stations)

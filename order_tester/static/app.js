@@ -31,24 +31,24 @@ function saveNow(){if(!loaded)return;let st=collect();try{localStorage.setItem('
 function saveLater(){if(!loaded)return;clearTimeout(saveT);saveT=setTimeout(saveNow,600)}
 async function initSettings(){let st=null,fromLocal=false;try{st=await (await fetch('/api/settings')).json()}catch(e){}
  if(!st||!Object.keys(st).length){try{st=JSON.parse(localStorage.getItem('odtSettings')||'null');fromLocal=!!st}catch(e){}}
- applySettings(st);await loadTemplates(st&&st.activeTemplate);loaded=true;renderPool();renderSt();showTab($('tab').value||'cfg');loadGeom(false);
- if(poolNames().some(r=>(pools[r]||[]).length))ensureScene().then(ok=>{if(ok){$('info').textContent=t('msg.loadedScene',{n:allSt.length});renderPool();renderSt();prevLater()}});
+ applySettings(st);await loadTemplates(st&&st.activeTemplate);loaded=true;renderPool();renderSt();showTab($('tab').value||'cfg');$('geominfo').textContent=t('map.needScene');fetch('/api/scene_geom?cached=1').then(x=>x.json()).then(r=>{if(r.ok){setScene(r.stations);setGeom(r)}}).catch(()=>{});
+ if(poolNames().some(r=>(pools[r]||[]).length))ensureScene(true).then(ok=>{if(ok){$('info').textContent=t('msg.loadedScene',{n:allSt.length});renderPool();renderSt();prevLater()}});
  document.querySelectorAll('input,select,textarea').forEach(e=>{if(e.id&&NOSAVE.has(e.id))return;if(e.closest('#steps'))return;e.addEventListener('input',saveLater);e.addEventListener('change',saveLater)});
  ['grp','veh','pri','label'].forEach(i=>{$(i).addEventListener('input',prevLater);$(i).addEventListener('change',prevLater)});
  $('info').textContent=st&&Object.keys(st).length?(fromLocal?t('msg.fromLocal'):t('msg.loaded')):'';if(fromLocal)saveNow()}
 function saveCfg(){if(!loaded)return post('/api/config',{base:$('base').value,pollSec:+$('poll').value});let st=collect();try{localStorage.setItem('odtSettings',JSON.stringify(st))}catch(e){}
  return post('/api/config',{base:st.base,pollSec:st.pollSec,settings:st})}
-async function loadSt(){saveCfg();$('info').textContent=t('msg.loading');let r;try{r=await sceneFetch('/api/stations?refresh=1')}catch(e){$('info').textContent=t('msg.sceneFail')+': '+e;return}
- if(!r.ok){$('info').textContent=r.err;return}setScene(r.stations);stations=r.stations;$('info').textContent=t('msg.nStations',{n:stations.length});fitAll();renderSt();renderPool();prevLater()}
+async function loadSt(){saveCfg();let ok=await loadScene(true,false);if(!ok)return;stations=allSt.slice();$('info').textContent=t('msg.nStations',{n:stations.length});fitAll();renderSt();renderPool();prevLater()}
 function setScene(list){allSt=list||[];stMap={};for(const s of allSt)stMap[s.name]=s}
 let busyN=0;function busy(on){busyN=Math.max(0,busyN+(on?1:-1));const o=$('busy');if(!o)return;if(busyN){$('busytxt').textContent=t('busy.scene');o.classList.add('on');if(document.activeElement)document.activeElement.blur()}else o.classList.remove('on')}
 document.addEventListener('keydown',e=>{if(busyN){e.preventDefault();e.stopPropagation()}},true);
-async function sceneFetch(url){busy(true);try{let r=await (await fetch(url)).json();if(!r.ok)alert(t('msg.sceneFail')+': '+(r.err||''));return r}catch(e){alert(t('msg.sceneFail')+': '+e);throw e}finally{busy(false)}}
+async function sceneFetch(url,quiet){busy(true);try{let r=await (await fetch(url)).json();if(r.sceneErr){r.ok=false;r.err=r.sceneErr}if(!r.ok&&!quiet)alert(t('msg.sceneFail')+': '+(r.err||''));return r}catch(e){if(!quiet)alert(t('msg.sceneFail')+': '+e);throw e}finally{busy(false)}}
 let sceneP=null;
-async function ensureScene(){if(allSt.length)return true;if(sceneP)return sceneP;$('info').textContent=t('msg.sceneLoading');
- sceneP=(async()=>{try{let r=await sceneFetch('/api/stations');if(!r.ok){$('info').innerHTML=`<b style=color:red>${t('msg.sceneFail')}: ${esc(r.err)}</b> <button onclick="ensureScene().then(()=>{renderSt();renderPool()})">${t('btn.retry')}</button>`;return false}
-  setScene(r.stations);if(stations.some(s=>s.missing||s.x==null))stations=stations.map(s=>stMap[s.name]?{...stMap[s.name]}:{...s,missing:true});return true}
-  catch(e){$('info').innerHTML=`<b style=color:red>${t('msg.sceneFail')}: ${esc(e)}</b>`;return false}finally{sceneP=null}})();return sceneP}
+async function loadScene(refresh,quiet){/* the one scene loader: stations + pre-points + groups + geometry + point cloud */
+ let r;try{r=await sceneFetch('/api/scene_geom'+(refresh?'?refresh=1':''),quiet)}catch(e){r={ok:false,err:String(e)}}
+ if(!r.ok){$('info').innerHTML=`<b style=color:red>${t('msg.sceneFail')}: ${esc(r.err||'')}</b> <button onclick="loadSt()">${t('btn.retry')}</button>`;return false}
+ setScene(r.stations);C.dataset.fitted='';setGeom(r);if(stations.some(s=>s.missing||s.x==null))stations=stations.map(s=>stMap[s.name]?{...stMap[s.name]}:{...s,missing:true});return true}
+async function ensureScene(quiet){if(allSt.length)return true;if(sceneP)return sceneP;sceneP=loadScene(false,quiet).finally(()=>{sceneP=null});return sceneP}
 async function usePaste(){let names=[...new Set($('paste').value.split(/[\s,，;；]+/).filter(x=>x))];await ensureScene();
  stations=names.map(n=>stMap[n]?{...stMap[n]}:{name:n,type:n.replace(/\d.*/,''),x:null,y:null,pre:'',missing:true});
  let miss=stations.filter(s=>s.missing).map(s=>s.name);$('info').innerHTML=t('msg.pasted',{n:names.length})+(allSt.length?'':' '+t('msg.noSceneCoords'))+(miss.length&&allSt.length?` <b style=color:red>${t('msg.notInScene')}: ${esc(miss.join(', '))}</b>`:'');renderSt();renderPool();fitAll()}
@@ -188,8 +188,6 @@ function showTab(tb){if(!['cfg','map','rob','ord'].includes(tb))tb='cfg';$('tab'
  document.querySelectorAll('#tabbar button').forEach(b=>b.classList.toggle('on',b.dataset.t==tb));saveLater();if(tb=='map'){let first=!C.dataset.sized;resizeMap();if(first)fitAll()}}
 function resizeMap(){if($('tab').value!='map')return;let top=C.getBoundingClientRect().top;C.width=Math.max(300,document.documentElement.clientWidth-16);C.height=Math.max(200,window.innerHeight-top-10);C.dataset.sized=1;draw()}
 window.addEventListener('resize',resizeMap);
-async function loadGeom(refresh){$('geominfo').textContent=t('map.loadingGeom');let r;try{r=await sceneFetch('/api/scene_geom'+(refresh?'?refresh=1':''))}catch(e){$('geominfo').textContent=t('map.geomFail')+' '+e;return}
- if(!r.ok){$('geominfo').textContent=r.err||t('map.geomFail');return}setGeom(r)}
 function setGeom(r){geom=r;if(r.stations&&r.stations.length){if(!allSt.length)setScene(r.stations);if(!stations.length){stations=r.stations;}
  else if(stations.some(s=>s.missing||s.x==null))stations=stations.map(s=>stMap[s.name]?{...stMap[s.name]}:{...s,missing:true});renderSt();renderPool();prevLater()}buildPC();$('geominfo').innerHTML=t('map.geomInfo',{c:r.curves.length,cs:r.curveSrc?' ('+esc(r.curveSrc)+')':'',p:r.npoints,ps:r.pointSrc?' ('+esc(r.pointSrc)+')':''})+(r.notes&&r.notes.length?` <span style=color:#a60 title="${esc(r.notes.join('\n'))}">⚠${esc(r.notes[r.notes.length-1])}</span>`:'');
  if(!stations.filter(s=>s.x!=null).length||!C.dataset.fitted)fitAll();draw()}

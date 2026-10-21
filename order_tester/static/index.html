@@ -50,7 +50,7 @@
 <div id=tab-map class=tab><div id=maptool>
  <span data-i18n=map.layers></span> <label><input type=checkbox id=ly_pc checked onchange=draw()><span data-i18n=map.pc></span></label><label><input type=checkbox id=ly_rt checked onchange=draw()><span data-i18n=map.rt></span></label>
  <label><input type=checkbox id=ly_st checked onchange=draw()><span data-i18n=map.st></span></label><label><input type=checkbox id=ly_rb checked onchange=draw()><span data-i18n=map.rb></span></label>
- <button onclick=fitAll() data-i18n=map.fit></button> <button onclick=loadGeom(true) data-i18n=map.reload></button>
+ <button onclick=fitAll() data-i18n=map.fit></button>
  | <span data-i18n=map.click></span> <span id=pm_box></span>
  | <span data-i18n=map.upload></span> <input type=file id=smapf accept=".smap,.json" onchange=uploadSmap()> <span data-i18n=map.orPath></span> <input id=smap_path size=28 placeholder="D:\maps\xxx.smap"><button onclick=useSmapPath() data-i18n=btn.use></button>
  <span id=geominfo></span> <span id=mapsum></span></div>
@@ -71,5 +71,5 @@
  <button onclick=clearFilt() data-i18n=f.clear></button> <span id=f_info class=dim></span>
  | <button onclick="grpCollapseAll(false)" data-i18n=btn.expandAll></button> <button onclick="grpCollapseAll(true)" data-i18n=btn.collapseAll></button></fieldset>
  <span id=sum></span><table id=ot></table></div>
-<script src="/static/app.js"></script><div id=busy role=alert aria-busy=true><div class=spin></div><div id=busytxt></div></div>
+<div id=busy role=alert aria-busy=true><div class=spin></div><div id=busytxt></div></div><script src="/static/app.js"></script>
 </body></html>
