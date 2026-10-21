@@ -94,12 +94,13 @@ def tessellate(cls, p0, p1, c1=None, c2=None, c3=None, n=16):
         out.append(q[0])
     return out
 
-def extract_geom(js):
+def extract_geom(js, points_only=False):
+    """points_only: skip route tessellation (routes already known from /scene)"""
     curves, pts = [], []
     def walk(o):
         if isinstance(o, dict):
             sp, ep = o.get("startPos"), o.get("endPos")
-            if isinstance(sp, dict) and isinstance(ep, dict) and o.get("className") and _xy(sp) and _xy(ep) and isinstance(sp.get("pos"), dict):
+            if not points_only and isinstance(sp, dict) and isinstance(ep, dict) and o.get("className") and _xy(sp) and _xy(ep) and isinstance(sp.get("pos"), dict):
                 pl = tessellate(o.get("className"), _xy(sp), _xy(ep), _xy(o.get("controlPos1")), _xy(o.get("controlPos2")), _xy(o.get("controlPos3")))
                 curves.append({"n": o.get("instanceName", ""), "c": o.get("className"), "p": [[round(x, 3), round(y, 3)] for x, y in pl]})
             npl = o.get("normalPosList")

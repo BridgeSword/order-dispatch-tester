@@ -42,10 +42,11 @@ async function loadSt(){saveCfg();let ok=await loadScene(true,false);if(!ok)retu
 function setScene(list){allSt=list||[];stMap={};for(const s of allSt)stMap[s.name]=s}
 let busyN=0;function busy(on){busyN=Math.max(0,busyN+(on?1:-1));const o=$('busy');if(!o)return;if(busyN){$('busytxt').textContent=t('busy.scene');o.classList.add('on');if(document.activeElement)document.activeElement.blur()}else{o.classList.remove('on','prog');$('busystage').textContent='';$('busyfill').style.width='0'}}
 document.addEventListener('keydown',e=>{if(busyN){e.preventDefault();e.stopPropagation()}},true);
-const STW={request:[0,5],download:[5,75],parse:[75,85],pointcloud:[85,95],cache:[95,100]};
+const STW={request:[0,5],download:[5,50],parse:[50,57],pointcloud:[57,60],mapdl:[60,85],mapparse:[85,92],downsample:[92,96],mapcache:[92,96],cache:[96,100]};
 const fmtB=n=>n<1e6?Math.round(n/1e3)+' KB':(n/1e6).toFixed(1)+' MB';
 function showProg(s){const o=$('busy'),bar=$('busybar'),fill=$('busyfill');o.classList.add('prog');let w=STW[s.stage]||[0,0],pct=w[0],ind=false,extra='';
- if(s.stage=='download'){if(s.total){let f=Math.min(1,(s.done||0)/s.total);pct=w[0]+(w[1]-w[0])*f;extra=' '+Math.round(f*100)+'% ('+fmtB(s.done||0)+' / '+fmtB(s.total)+')'}else{ind=true;extra=' '+fmtB(s.done||0)}}
+ if(s.stage=='downsample'&&s.done)extra=' ('+s.done.toLocaleString()+' '+t('prog.points')+')';
+ else if(s.stage=='download'||s.stage=='mapdl'){if(s.total){let f=Math.min(1,(s.done||0)/s.total);pct=w[0]+(w[1]-w[0])*f;extra=' '+Math.round(f*100)+'% ('+fmtB(s.done||0)+' / '+fmtB(s.total)+')'}else{ind=true;extra=' '+fmtB(s.done||0)}}
  else if(s.stage=='request')ind=true;
  bar.classList.toggle('ind',ind);fill.style.width=pct.toFixed(1)+'%';$('busystage').textContent=t('prog.'+s.stage)+extra+' · '+t('prog.elapsed',{s:Math.round(s.elapsed||0)})}
 async function sceneJob(url){/* background scene load with progress */
@@ -227,7 +228,8 @@ function fitAll(){let b=geom&&geom.bounds?{...geom.bounds}:null;for(const s of (
  if(C.dataset.sized)C.dataset.fitted=1;draw()}
 const tx=x=>x*view.s+view.ox,ty=y=>view.oy-y*view.s;let robotsCache=[],ordersCache=[];
 function draw(){X.setTransform(1,0,0,1,0,0);X.clearRect(0,0,C.width,C.height);X.font='11px sans-serif';
- if($('ly_pc').checked&&pcOff){X.imageSmoothingEnabled=false;let sc=view.s/pcK;X.drawImage(pcOff.c,tx(pcOff.x0),ty(pcOff.y1),pcOff.w*sc,pcOff.h*sc)}
+ if($('ly_pc').checked&&pcOff){X.imageSmoothingEnabled=false;let sc=view.s/pcK,k=Math.max(1,Math.min(4,+($('pcsize')&&$('pcsize').value)||1)),o=(k-1)/2;/* point size in screen px: stamp the cloud k×k times, independent of zoom */
+  for(let i=0;i<k;i++)for(let j=0;j<k;j++)X.drawImage(pcOff.c,tx(pcOff.x0)+i-o,ty(pcOff.y1)+j-o,pcOff.w*sc,pcOff.h*sc)}
  if($('ly_rt').checked&&geom){X.strokeStyle='#2a8a8a';X.lineWidth=1.2;X.beginPath();for(const c of geom.curves){let p=c.p;X.moveTo(tx(p[0][0]),ty(p[0][1]));for(let i=1;i<p.length;i++)X.lineTo(tx(p[i][0]),ty(p[i][1]))}X.stroke();
   if(view.s>12){X.fillStyle='#2a8a8a';for(const c of geom.curves){let p=c.p,m=Math.floor(p.length/2),a=p[Math.max(0,m-1)],b=p[Math.min(p.length-1,m)];let ang=Math.atan2(-(b[1]-a[1]),b[0]-a[0]),cx=tx((a[0]+b[0])/2),cy=ty((a[1]+b[1])/2);
    X.beginPath();X.moveTo(cx+6*Math.cos(ang),cy+6*Math.sin(ang));X.lineTo(cx+6*Math.cos(ang+2.5),cy+6*Math.sin(ang+2.5));X.lineTo(cx+6*Math.cos(ang-2.5),cy+6*Math.sin(ang-2.5));X.fill()}}}

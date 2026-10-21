@@ -79,6 +79,43 @@ class E2ETest(unittest.TestCase):
         j, _ = self._run_job(share=False); self.assertEqual(j["stage"], "failed"); self.assertIn("500", j["result"]["sceneErr"])
         self.assertFalse(call(self.port, "/api/scene_job?id=nope")["ok"])
 
+    def test_downloadscene_hash_cache_and_progress(self):
+        import io, zipfile, random
+        def mk(seed):
+            r = random.Random(seed); pts = [{"x": r.uniform(0, 50), "y": r.uniform(0, 20)} for _ in range(3000)]
+            smap = {"normalPosList": pts, "advancedCurveList": [{"className": "StraightPath", "instanceName": "X", "startPos": {"instanceName": "A", "pos": {"x": 0, "y": 0}}, "endPos": {"instanceName": "B", "pos": {"x": 1, "y": 0}}}]}
+            bio = io.BytesIO()
+            with zipfile.ZipFile(bio, "w") as z: z.writestr("site.smap", json.dumps(smap))
+            return bio.getvalue()
+        self.addCleanup(setattr, fake_rds, "DOWNLOAD_SCENE", b""); fake_rds.DOWNLOAD_SCENE = mk(1)
+        j, seen = self._run_job(share=False); g = j["result"]; stages = [x[0] for x in seen]
+        self.assertEqual(g["sceneErr"], ""); self.assertGreater(g["npoints"], 1000); self.assertEqual(len(g["curves"]), 12)  # /scene routes kept, smap route not re-tessellated
+        self.assertIn("downloadScene", g["pointSrc"])
+        dst = C.load_settings()["smapAuto"]; m0 = os.path.getmtime(dst); self.assertTrue(C.load_settings().get("smapAutoHash"))
+        with open(C.P["smap_cache"], encoding="utf-8") as f: self.assertIsNone(json.load(f)["curves"])
+        # same content again: file untouched, cache reused (no downsample)
+        time.sleep(0.05); j, seen2 = self._run_job(share=False); st2 = [x[0] for x in seen2]
+        self.assertEqual(j["result"]["npoints"], g["npoints"]); self.assertEqual(os.path.getmtime(dst), m0)
+        self.assertIn("unchanged", " ".join(j["result"]["notes"]))
+        # changed map: rewritten and re-parsed
+        fake_rds.DOWNLOAD_SCENE = mk(2); j, seen3 = self._run_job(share=False)
+        self.assertNotIn("unchanged", " ".join(j["result"]["notes"])); self.assertNotEqual(C.load_settings()["smapAutoHash"], "")
+        dls = [x for x in seen3 if x[0] == "mapdl"]
+        self.assertTrue(dls and all(x[2] == len(fake_rds.DOWNLOAD_SCENE) for x in dls), dls[:3])
+        self.LAST = (stages, st2)
+
+    def test_load_smap_stage_reporting(self):
+        import io, zipfile
+        bio = io.BytesIO()
+        with zipfile.ZipFile(bio, "w") as z: z.writestr("a.smap", json.dumps({"normalPosList": [{"x": i * 0.1, "y": 0} for i in range(500)]}))
+        fp = os.path.join(C.P["data"], "t.smap")
+        with open(fp, "wb") as f: f.write(bio.getvalue())
+        st = []; prog = lambda s, *a: st.append(s)
+        c, p, cell = C.load_smap(fp, prog, need_curves=False); self.assertEqual(st, ["mapparse", "downsample"]); self.assertEqual(len(p), 500)
+        st.clear(); c2, p2, _ = C.load_smap(fp, prog, need_curves=False); self.assertEqual(st, ["mapcache"]); self.assertEqual(p2, p)
+        st.clear(); C.load_smap(fp, prog, need_curves=True); self.assertEqual(st, ["mapparse", "downsample"])  # cache has no curves -> parse
+        os.utime(fp, (1, 1)); st.clear(); C.load_smap(fp, prog, need_curves=True); self.assertEqual(st, ["mapcache"])  # mtime change alone does not invalidate
+
     def test_geom_cached_only_and_no_cache_headers(self):
         self.assertFalse(call(self.port, "/api/scene_geom?cached=1")["ok"])
         with urllib.request.urlopen("http://127.0.0.1:%d/" % self.port) as r:

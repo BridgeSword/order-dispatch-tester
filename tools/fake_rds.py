@@ -6,6 +6,7 @@ import argparse, io, json, threading, time, zipfile
 from http.server import ThreadingHTTPServer, BaseHTTPRequestHandler
 
 SCENE_DELAY, SCENE_FAIL, SCENE_NOLEN = 0, False, False
+DOWNLOAD_SCENE = b""  # zip bytes served by /downloadScene (tests); empty -> 404
 
 def scene():
     pts = []; curves = []
@@ -47,7 +48,12 @@ class H(BaseHTTPRequestHandler):
                 b = b"<html>not json</html>"; self.send_response(200); self.send_header("Content-Length", str(len(b))); self.end_headers(); self.wfile.write(b); return
             if SCENE_FAIL: return self.js({"err": "fake scene failure"}, 500)
             return self.js(scene())
-        if p == "/downloadScene": self.send_response(404); self.end_headers(); return
+        if p == "/downloadScene":
+            if not DOWNLOAD_SCENE: self.send_response(404); self.end_headers(); return
+            b = DOWNLOAD_SCENE; self.send_response(200); self.send_header("Content-Type", "application/zip"); self.send_header("Content-Length", str(len(b))); self.end_headers()
+            n = 8
+            for i in range(n): self.wfile.write(b[i * len(b) // n:(i + 1) * len(b) // n]); self.wfile.flush(); time.sleep(0.05)
+            return
         if p.startswith("/orderDetails/"):
             oid = p.split("/", 2)[2]
             with LOCK: o = ORDERS.get(oid)
@@ -80,6 +86,8 @@ def serve(port):
     srv = ThreadingHTTPServer(("127.0.0.1", port), H); threading.Thread(target=srv.serve_forever, daemon=True).start(); return srv
 
 if __name__ == "__main__":
-    ap = argparse.ArgumentParser(); ap.add_argument("--port", type=int, default=18088); ap.add_argument("--scene-delay", type=float, default=0); ap.add_argument("--scene-fail", action="store_true"); ap.add_argument("--scene-nolen", action="store_true"); a = ap.parse_args()
+    ap = argparse.ArgumentParser(); ap.add_argument("--port", type=int, default=18088); ap.add_argument("--scene-delay", type=float, default=0); ap.add_argument("--scene-fail", action="store_true"); ap.add_argument("--scene-nolen", action="store_true"); ap.add_argument("--download-scene", help="zip file served by /downloadScene"); a = ap.parse_args()
     SCENE_DELAY, SCENE_FAIL, SCENE_NOLEN = a.scene_delay, a.scene_fail, a.scene_nolen
+    if a.download_scene:
+        with open(a.download_scene, "rb") as f: DOWNLOAD_SCENE = f.read()
     print("fake RDS on http://127.0.0.1:%d" % a.port); serve(a.port).serve_forever()

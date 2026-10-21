@@ -111,11 +111,21 @@ class RdsAdapter(DispatcherAdapter):
         return st, js, txt
     def parse_stations(self, scene): return rds_scene.parse_scene(scene)
     def parse_groups(self, scene): return rds_scene.parse_groups(scene)
-    def extract_geom(self, scene): return rds_scene.extract_geom(scene)
+    def extract_geom(self, scene, points_only=False): return rds_scene.extract_geom(scene, points_only)
     def decode_map(self, raw): return rds_scene.decode_smap(raw)
-    def download_maps(self, timeout=120):
+    def download_maps(self, timeout=120, progress=None):
+        """(status, bytes); streams so progress("mapdl", bytes, content_length_or_None) can be reported"""
+        prog = progress or (lambda *a, **k: None)
         try:
-            with urllib.request.urlopen(self.base.rstrip("/") + "/downloadScene", timeout=timeout) as r: return r.status, r.read()
+            with urllib.request.urlopen(self.base.rstrip("/") + "/downloadScene", timeout=timeout) as r:
+                try: total = int(r.headers.get("Content-Length") or 0) or None
+                except ValueError: total = None
+                buf = bytearray(); prog("mapdl", 0, total)
+                while True:
+                    c = r.read1(262144) if hasattr(r, "read1") else r.read(262144)
+                    if not c: break
+                    buf += c; prog("mapdl", len(buf), total)
+                return r.status, bytes(buf)
         except urllib.error.HTTPError as e: return e.code, b""
         except Exception as e: return None, str(e).encode()
     def raw_get(self, path): return self.request("GET", path, quiet=True)

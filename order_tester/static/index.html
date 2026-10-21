@@ -48,7 +48,7 @@
  <span data-i18n=gen.count></span> <input id=cnt type=number value=9 oninput="$('cnt_auto').value='0';renderPool()"><input type=hidden id=cnt_auto value=1> <button onclick="$('cnt_auto').value='1';renderPool()" data-i18n=gen.countAuto data-i18n-title=gen.countAutoTip></button> <button onclick=generate() style="background:#cfc" data-i18n=gen.btn></button> <span class=dim data-i18n=gen.hint></span> <span id=genmsg></span></fieldset>
 </div>
 <div id=tab-map class=tab><div id=maptool>
- <span data-i18n=map.layers></span> <label><input type=checkbox id=ly_pc checked onchange=draw()><span data-i18n=map.pc></span></label><label><input type=checkbox id=ly_rt checked onchange=draw()><span data-i18n=map.rt></span></label>
+ <span data-i18n=map.layers></span> <label><input type=checkbox id=ly_pc checked onchange=draw()><span data-i18n=map.pc></span></label><select id=pcsize onchange=draw() data-i18n-title=map.pcSizeTip><option value=1 data-i18n=map.pcThin></option><option value=2 data-i18n=map.pcMed></option><option value=3 data-i18n=map.pcBold></option><option value=4 data-i18n=map.pcXBold></option></select> <label><input type=checkbox id=ly_rt checked onchange=draw()><span data-i18n=map.rt></span></label>
  <label><input type=checkbox id=ly_st checked onchange=draw()><span data-i18n=map.st></span></label><label><input type=checkbox id=ly_rb checked onchange=draw()><span data-i18n=map.rb></span></label>
  <button onclick=fitAll() data-i18n=map.fit></button>
  | <span data-i18n=map.click></span> <span id=pm_box></span>

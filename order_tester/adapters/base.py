@@ -62,10 +62,10 @@ class DispatcherAdapter(object):
     def parse_groups(self, scene):
         """[{name, robots: [id]}]"""
         return []
-    def extract_geom(self, scene):
-        """(curves [{n, c, p: [[x, y]...]}], points [(x, y)])"""
+    def extract_geom(self, scene, points_only=False):
+        """(curves [{n, c, p: [[x, y]...]}], points [(x, y)]); points_only skips curves"""
         return [], []
-    def download_maps(self):
+    def download_maps(self, timeout=120, progress=None):
         """(status, bytes) of a zip with map files, or (None, b'') if unsupported"""
         return None, b""
     def decode_map(self, raw):

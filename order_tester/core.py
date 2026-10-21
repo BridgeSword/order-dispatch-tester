@@ -123,21 +123,30 @@ def ensure_prepoints():
         return err
     return ""
 
-def load_smap(path):
-    stt = os.stat(path); key = [os.path.abspath(path), stt.st_mtime, stt.st_size]
+def _sha1(b): import hashlib; return hashlib.sha1(b).hexdigest()
+
+def load_smap(path, progress=None, need_curves=True):
+    """(curves, points, cell) from a .smap. The point cloud cache is keyed by the file's content hash, so an identical
+    map is never parsed twice. need_curves=False (routes already known from /scene) skips route tessellation."""
+    prog = progress or (lambda *a, **k: None)
+    with open(path, "rb") as f: raw = f.read()
+    h = _sha1(raw)
     try:
         with open(P["smap_cache"], encoding="utf-8") as f: c = json.load(f)
-        if c.get("key") == key: return c["curves"], [tuple(p) for p in c["points"]], c.get("cell")
+        if c.get("sha1") == h and (c.get("curves") is not None or not need_curves):
+            prog("mapcache"); return c.get("curves") or [], [tuple(p) for p in c["points"]], c.get("cell")
     except Exception: pass
-    with open(path, "rb") as f: raw = f.read()
+    prog("mapparse")
     curves, pts = [], []
     for js in AD().decode_map(raw):
-        c, p = AD().extract_geom(js); curves += c; pts += p
+        c, p = AD().extract_geom(js, points_only=not need_curves); curves += c; pts += p
     if not curves and not pts: raise ValueError("no 2D map JSON in file")
+    prog("downsample", len(pts))
     pts, cell = rds_scene.downsample(pts)
     pts = [(round(x, 3), round(y, 3)) for x, y in pts]
     try:
-        with open(P["smap_cache"], "w", encoding="utf-8") as f: json.dump({"key": key, "curves": curves, "points": pts, "cell": cell}, f)
+        with open(P["smap_cache"], "w", encoding="utf-8") as f:
+            json.dump({"sha1": h, "path": os.path.abspath(path), "curves": curves if need_curves else None, "points": pts, "cell": cell}, f)
     except Exception as e: log("smap_cache_err", err=str(e))
     return curves, pts, cell
 
@@ -211,7 +220,7 @@ def build_geom(refresh=False, progress=None):
         curves, p0 = AD().extract_geom(js); stations = AD().parse_stations(js)
         csrc = "/scene" if curves else ""
         prog("pointcloud")
-        if p0: pts, cell = rds_scene.downsample(p0); psrc = "/scene normalPosList"
+        if p0: prog("downsample", len(p0)); pts, cell = rds_scene.downsample(p0); psrc = "/scene normalPosList"
         else: notes.append("/scene: no point cloud (normalPosList)")
       except Exception as e:
         scene_err = "/scene parse error: %s" % e; js = None; curves, stations = [], []; notes.append(scene_err)
@@ -220,34 +229,40 @@ def build_geom(refresh=False, progress=None):
     if not pts and smap:
         if os.path.isfile(smap):
             try:
-                c2, pts, cell = load_smap(smap); psrc = "smap: " + smap
+                c2, pts, cell = load_smap(smap, prog, need_curves=not curves); psrc = "smap: " + smap
                 if not curves and c2: curves = c2; csrc = "smap: " + smap
             except Exception as e: notes.append("smap parse failed %s: %s" % (smap, e))
         else: notes.append("smapPath not found: " + smap)
     auto = load_settings().get("smapAuto")
     if not pts and auto and os.path.isfile(auto) and not refresh:
         try:
-            c2, pts, cell = load_smap(auto); psrc = "/downloadScene (cache " + os.path.basename(auto) + ")"
+            c2, pts, cell = load_smap(auto, prog, need_curves=not curves); psrc = "/downloadScene (cache " + os.path.basename(auto) + ")"
             if not curves and c2: curves = c2; csrc = psrc
         except Exception as e: notes.append("cached map parse failed: %s" % e)
     if not pts and js is not None:
-        code, raw = AD().download_maps()
+        code, raw = AD().download_maps(progress=prog)
         if code == 200 and raw[:2] == b"PK":
             try:
+                prog("mapparse")
                 zf = zipfile.ZipFile(io.BytesIO(raw)); seen = {}
                 for nm in zf.namelist():
                     if nm.lower().endswith(".smap") and os.path.basename(nm) not in seen: seen[os.path.basename(nm)] = nm
                 if seen:
                     os.makedirs(P["maps"], exist_ok=True)
-                    if len(seen) == 1:
-                        dst = os.path.join(P["maps"], "rds_" + next(iter(seen)))
-                        with open(dst, "wb") as f: f.write(zf.read(next(iter(seen.values()))))
+                    datas = {b2: zf.read(nm) for b2, nm in seen.items()}
+                    h = _sha1(b"".join(k.encode() + b"\0" + _sha1(v).encode() for k, v in sorted(datas.items())))
+                    dst = os.path.join(P["maps"], "rds_" + next(iter(seen))) if len(seen) == 1 else os.path.join(P["maps"], "rds_scene_maps.smap")
+                    st0 = load_settings()
+                    if st0.get("smapAuto") == dst and st0.get("smapAutoHash") == h and os.path.isfile(dst):
+                        notes.append("/downloadScene: map unchanged, reused")  # same content: keep file -> point cloud cache stays valid
                     else:
-                        dst = os.path.join(P["maps"], "rds_scene_maps.smap")
-                        with zipfile.ZipFile(dst, "w", zipfile.ZIP_DEFLATED) as out:
-                            for b2, nm in seen.items(): out.writestr(b2, zf.read(nm))
-                    save_settings({"smapAuto": dst})
-                    c2, pts, cell = load_smap(dst); psrc = "/downloadScene (" + ", ".join(seen) + ")"
+                        if len(seen) == 1:
+                            with open(dst, "wb") as f: f.write(next(iter(datas.values())))
+                        else:
+                            with zipfile.ZipFile(dst, "w", zipfile.ZIP_DEFLATED) as out:
+                                for b2, d in datas.items(): out.writestr(b2, d)
+                        save_settings({"smapAuto": dst, "smapAutoHash": h})
+                    c2, pts, cell = load_smap(dst, prog, need_curves=not curves); psrc = "/downloadScene (" + ", ".join(seen) + ")"
                     if not curves and c2: curves = c2; csrc = psrc
                 else: notes.append("/downloadScene: zip without .smap")
             except Exception as e: notes.append("/downloadScene parse failed: %s" % e)
