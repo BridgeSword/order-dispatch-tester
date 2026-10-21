@@ -201,6 +201,7 @@
  "run.off": "已停止",
  "run.on": "运行中",
  "run.sent": "已发送",
+ "scene.loadedAt": "场景加载于 {t}",
  "srv.autoEnd": "派单结束",
  "srv.badSmap": "无法解析: 不是 JSON .smap, 也不是含 .smap 的 zip 包",
  "srv.changed": "状态已变化",

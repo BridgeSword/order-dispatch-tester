@@ -27,9 +27,11 @@ def init(data_dir, adapter="rds", base="http://127.0.0.1:8088"):
     P["sent"] = os.path.join(P["data"], "sent_orders.json")
     P["smap_cache"] = os.path.join(P["data"], "pointcloud_cache.json")
     P["maps"] = os.path.join(P["data"], "maps")
+    P["scene_cache"] = os.path.join(P["data"], "scene_cache.json")
     P["log"] = os.path.join(P["logs"], "rds_%s.jsonl" % datetime.datetime.now().strftime("%Y%m%d_%H%M%S"))
     S["store"] = T.Store(os.path.join(P["data"], "templates"))
     S["adapter"] = get_adapter(adapter, base, log)
+    restore_scene_cache()
 
 def AD(): return S["adapter"]
 def TERMINAL(): return AD().terminal_states
@@ -139,6 +141,30 @@ def load_smap(path):
     except Exception as e: log("smap_cache_err", err=str(e))
     return curves, pts, cell
 
+def _apply_geom(g):
+    """make a successfully loaded scene the current one (memory)"""
+    with lock:
+        S["geom"] = g; st = g.get("stations") or []
+        if st: S["prepoints"] = {q["name"]: q["pre"] for q in st if q.get("pre")}; S["st_cache"] = (g.get("loadedAt") or time.time(), st)
+        gs = g.get("groups") or []
+        if gs: S["groups"] = gs; S["robot_group"] = {rid: x["name"] for x in gs for rid in x["robots"]}
+
+def save_scene_cache(g):
+    try:
+        tmp = P["scene_cache"] + ".tmp"
+        with open(tmp, "w", encoding="utf-8") as f: json.dump(g, f, ensure_ascii=False)
+        os.replace(tmp, P["scene_cache"])
+    except Exception as e: log("scene_cache_save_fail", err=str(e))
+
+def restore_scene_cache():
+    """last successful scene load survives page reloads and server restarts"""
+    try:
+        with open(P["scene_cache"], encoding="utf-8") as f: g = json.load(f)
+        if isinstance(g, dict) and g.get("ok") and g.get("stations"): g["fromCache"] = True; _apply_geom(g); return True
+    except FileNotFoundError: pass
+    except Exception as e: log("scene_cache_load_fail", err=str(e))
+    return False
+
 def build_geom(refresh=False):
     notes = []; curves, pts, cell = [], [], None; psrc = ""; csrc = ""; stations = []
     st, js, txt = AD().scene()
@@ -192,9 +218,10 @@ def build_geom(refresh=False):
     if not pts: notes.append("no point cloud: upload a .smap or set a local smap path on the Map tab")
     g = {"ok": True, "curves": curves, "points": [c for p in pts for c in p], "npoints": len(pts), "cell": cell,
          "bounds": rds_scene.geom_bounds(curves, pts, stations), "stations": stations, "pointSrc": psrc, "curveSrc": csrc, "notes": notes, "sceneErr": scene_err}
-    with lock:
-        S["geom"] = g
-        if stations: S["prepoints"] = {q["name"]: q["pre"] for q in stations if q.get("pre")}; S["st_cache"] = (time.time(), stations)
+    if not scene_err:
+        g["loadedAt"] = time.time(); g["groups"] = S.get("groups") or []
+        _apply_geom(g); save_scene_cache(g)
+    elif not S.get("geom"): S["geom"] = g   # keep the last good scene on failure
     log("geom", npoints=len(pts), ncurves=len(curves), pointSrc=psrc, curveSrc=csrc, notes=notes)
     return g
 

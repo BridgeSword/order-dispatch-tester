@@ -16,3 +16,5 @@ __pycache__/
 node_modules/
 .DS_Store
 Thumbs.db
+scene_cache.json
+scene_cache.json.tmp

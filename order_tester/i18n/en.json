@@ -201,6 +201,7 @@
  "run.off": "Idle",
  "run.on": "Running",
  "run.sent": "sent",
+ "scene.loadedAt": "Scene loaded at {t}",
  "srv.autoEnd": "Auto dispatch finished",
  "srv.badSmap": "Cannot parse: neither a JSON .smap nor a zip containing .smap",
  "srv.changed": "state changed",

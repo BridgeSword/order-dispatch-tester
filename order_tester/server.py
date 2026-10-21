@@ -40,7 +40,7 @@ class H(BaseHTTPRequestHandler):
             return self.send({"lang": lang if lang in i18n.LANGS else "zh", "langs": list(i18n.LANGS), "t": i18n.table(lang)})
         if path == "/api/stations":
             c = S.get("st_cache")
-            if c and time.time() - c[0] < 120 and "refresh=1" not in p: return self.send({"ok": True, "stations": c[1], "cached": True})
+            if c and "refresh=1" not in p: return self.send({"ok": True, "stations": c[1], "cached": True})
             stations, err = C.load_scene_stations()
             if stations is None: return self.send({"ok": False, "err": C.msg("srv.sceneFail", err=err)})
             return self.send({"ok": True, "stations": stations})

@@ -34,6 +34,20 @@ class E2ETest(unittest.TestCase):
         self.assertEqual(len(call(self.port, "/api/scene_geom?cached=1")["stations"]), 24)
         r = call(self.port, "/api/stations?refresh=1"); self.assertTrue(r["ok"]); self.assertEqual(len(r["stations"]), 24)
 
+    def test_scene_cache_persists_and_survives_failure(self):
+        g = call(self.port, "/api/scene_geom?refresh=1"); self.assertEqual(g["sceneErr"], ""); self.assertTrue(g["loadedAt"])
+        self.assertTrue(os.path.isfile(C.P["scene_cache"]))
+        # a failed refresh keeps the last good scene
+        self.addCleanup(setattr, fake_rds, "SCENE_FAIL", False); fake_rds.SCENE_FAIL = True
+        self.assertTrue(call(self.port, "/api/scene_geom?refresh=1")["sceneErr"])
+        c = call(self.port, "/api/scene_geom?cached=1"); self.assertEqual(len(c["stations"]), 24); self.assertEqual(c["loadedAt"], g["loadedAt"])
+        # "restart": wipe memory, re-init on the same data dir; RDS still failing -> served from disk
+        C.S.update(geom=None, prepoints={}, groups=[], robot_group={}); C.S.pop("st_cache", None)
+        C.init(C.P["data"], base=C.AD().base)
+        c = call(self.port, "/api/scene_geom?cached=1"); self.assertTrue(c["fromCache"]); self.assertEqual(c["loadedAt"], g["loadedAt"]); self.assertEqual(len(c["stations"]), 24)
+        self.assertEqual(C.S["prepoints"].get("AP1"), "LM1")
+        st = call(self.port, "/api/stations"); self.assertTrue(st["ok"]); self.assertEqual(len(st["stations"]), 24)
+
     def test_geom_cached_only_and_no_cache_headers(self):
         self.assertFalse(call(self.port, "/api/scene_geom?cached=1")["ok"])
         with urllib.request.urlopen("http://127.0.0.1:%d/" % self.port) as r:
