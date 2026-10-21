@@ -663,14 +663,25 @@ def dispatcher(t, pools):
     S["running"] = False; S["msg"] = msg("srv.autoEnd")
 
 # ---------------------------------------------------------------- polling
+MISS_LIMIT = 3  # consecutive 'order not found' answers before an order is treated as cancelled in RDS
 def poll_once():
     TERM = TERMINAL()
     with lock: ids = [k for k, o in S["orders"].items() if is_active(o)]
     for oid in ids:
         js = AD().order_status(oid)
         if js is None: continue
+        if js.get("missing"):
+            with lock:
+                o = S["orders"][oid]; tnow = time.time()
+                o.setdefault("_missAt", tnow); o["_miss"] = o.get("_miss", 0) + 1
+                if o["_miss"] >= MISS_LIMIT:  # gone from RDS (cancelled/withdrawn there): terminal, freeze duration
+                    o.update(state="CANCELED", gone=True, goneMsg=js.get("msg", ""), changed=tnow)
+                    o["sig"] = "CANCELED|%s|%s" % (o.get("vehicle", ""), o.get("blocks", ""))
+                    o["ended"] = o.pop("_missAt"); o["endedSrc"] = "rds-missing"; o.pop("_miss", None); o.pop("_reopened", None)
+                    log("order_change", id=oid, state="CANCELED", gone=True, msg=js.get("msg", ""))
+            continue
         with lock:
-            o = S["orders"][oid]
+            o = S["orders"][oid]; o.pop("_miss", None); o.pop("_missAt", None)
             new = {"state": js["state"] if js.get("state") is not None else o["state"], "vehicle": js.get("vehicle") or o["vehicle"]}
             bl = js.get("blockStates") or []
             bsig = ",".join(str(b) for b in bl)

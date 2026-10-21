@@ -143,3 +143,16 @@
   - 用各池旁边的现有添加控件。
 - 要移除站点，点池里该站点标签上的 ×。
 - 列表为空时会显示上面这几种添加方式的提示。
+
+### 在 RDS 里取消的运单
+- 轮询会一直跟踪 FAILED 运单（FAILED 不是终态，RDS 里还能恢复），直到它进入真正的终态。
+- 终态包括：FINISHED、STOPPED、MANUAL_FINISHED、CANCELED/CANCELLED、WITHDRAWN、TERMINATED。进入终态后：
+  - 时长冻结，记下结束时间；
+  - 不再计入卡死；
+  - 统计中按该状态计数；
+  - 可以在状态过滤里勾选 CANCELED/STOPPED 筛出这类运单。
+- 在 RDS 界面取消（撤销）的运单，RDS 会直接删掉记录：`/orderDetails/<id>` 返回 `{"code":50002,"msg":"order details is empty"}`。
+  - 工具连续 3 次收到“查无此单”后，把该单记为 **CANCELED（RDS 已无此单）**，显示为紫色。结束时间取第一次查不到的时刻，日志里记 `order_change gone=true`。
+  - 只有网络错误或超时时，不会这样判定。
+  - 中途又能查到这单时，计数清零，按 RDS 返回的实际状态继续跟踪。
+- 工具只用只读 GET 查询运单状态，不会对 RDS 发任何写操作。

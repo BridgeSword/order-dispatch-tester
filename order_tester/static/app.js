@@ -345,7 +345,7 @@ function updSortInd(){if(!ordTable)return;for(const th of ordTable.tHead.rows[0]
 function ordCmp(a,b){let k=OSORT[ordSort.i],x=a[k],y=b[k],nx=x==null||x==='',ny=y==null||y==='';
  if(nx||ny)return nx&&ny?(b._created-a._created):nx?1:-1; // empty values always last
  let r=typeof x=='number'&&typeof y=='number'?x-y:String(x).localeCompare(String(y),'zh',{numeric:true});return r*ordSort.d||(b._created-a._created)}
-const FSTATES=['待下发','SENT','CREATED','TOBEDISPATCHED','RUNNING','WAITING','FAILED','FINISHED','STOPPED','SEND_FAIL','其它'];
+const FSTATES=['待下发','SENT','CREATED','TOBEDISPATCHED','RUNNING','WAITING','FAILED','FINISHED','STOPPED','CANCELED','SEND_FAIL','其它'];
 const FKNOWN=new Set(FSTATES.slice(0,-1));
 let ordFilt=(()=>{try{return JSON.parse(localStorage.getItem('ordFilter')||'{}')||{}}catch(e){return {}}})();
 let grpCollapsed=new Set((()=>{try{return JSON.parse(localStorage.getItem('ordCollapsed')||'[]')}catch(e){return []}})());
@@ -365,7 +365,7 @@ function grpCollapseAll(c){for(const g of lastGroups)c?grpCollapsed.add(g.k):grp
 function selGrp(k,on){let g=lastGroups.find(x=>x.k==k);if(!g)return;g.rows.forEach(o=>on?sel.add(o.id):sel.delete(o.id));tick()}
 function batchName(m,k){if(k=='drafts')return t('state.draft');if(k=='nobatch')return t('ord.nobatch');let n=m.name||k;if(/^#\d+$/.test(n))return (m.kind=='hist'?t('ord.histBatch'):t('ord.batch'))+' '+n;
  let mm=/^(历史批次|批次) (#\d+)$/.exec(n);return mm?(mm[1]=='历史批次'?t('ord.histBatch'):t('ord.batch'))+' '+mm[2]:n}
-const TERM=['FINISHED','STOPPED','MANUAL_FINISHED','CANCELED','CANCELLED','SEND_FAIL','SKIPPED'];/* FAILED is NOT terminal: keeps counting and can be stuck */
+const TERM=['FINISHED','STOPPED','MANUAL_FINISHED','CANCELED','CANCELLED','WITHDRAWN','TERMINATED','SEND_FAIL','SKIPPED'];/* FAILED is NOT terminal: keeps counting and can be stuck */
 async function tick(){try{let r=await (await fetch('/api/state')).json();if(r.groups&&r.groups.length)fillGroups(r.groups);robotsCache=r.robots;ordersCache=r.orders;
  $('run').textContent=(r.running?t('run.on'):t('run.off'))+' · '+t('run.sent')+' '+r.sent+' '+r.msg+' · '+t('run.log')+': '+r.log;
  let now=r.now||Date.now()/1000,T=+$('stuck').value,still=+$('still').value,term=TERM;
@@ -397,7 +397,7 @@ async function tick(){try{let r=await (await fetch('/api/state')).json();if(r.gr
  let items=[];for(const g of gs){g.rows.sort(ordCmp);let col=grpCollapsed.has(g.k),m=g.meta,sc={};g.rows.forEach(o=>{let s=stName(o.state);sc[s]=(sc[s]||0)+1});
   let nst=g.rows.filter(stkOf).length,stv=g.all.map(o=>o.started).filter(Boolean),anyAct=g.all.some(o=>o.state!=DRAFT&&!term.includes(o.state)),env=g.all.map(o=>o.ended).filter(Boolean);
   let t0=stv.length?Math.min(...stv):null,t1=anyAct?now:(env.length?Math.max(...env):null),allSel=g.rows.every(o=>sel.has(o.id));
-  let SC={FINISHED:'#888',FAILED:'#e67e00',RUNNING:'#06c'};SC[t('state.draft')]='#a60';
+  let SC={FINISHED:'#888',FAILED:'#e67e00',RUNNING:'#06c',CANCELED:'#a0a',STOPPED:'#a0a'};SC[t('state.draft')]='#a60';
   let info=[`<b>${col?'▶':'▼'} ${esc(g.name)}</b>`,m.start?t('ord.sentAt')+' '+fmtTs(m.start):'',t('ord.nOrders',{n:`${fon?g.rows.length+'/':''}${g.all.length}`}),
    Object.entries(sc).map(([s,n])=>`<span style="color:${SC[s]||'#333'}">${esc(s)}:${n}</span>`).join(' '),nst?`<b style=color:red>${t('ord.stuckN',{n:nst})}</b>`:'',
    t0?t('ord.total')+' '+fmtDur((t1||now)-t0)+(anyAct?' ('+t('ord.inprog')+')':''):'',m.group?`<span style="background:#eef7e6;padding:0 3px;font-size:11px">${t('ord.grp')}:${esc(m.group)}</span>`:'',
@@ -407,7 +407,7 @@ async function tick(){try{let r=await (await fetch('/api/state')).json();if(r.gr
   for(const o of g.rows){let dr=o.state==DRAFT,done=term.includes(o.state),stk=isAct(o)&&hasVeh(o)&&o.idle>T;
   let age=o._age,idle=o._idle,dur=o._dur;
   items.push({k:o.id,cls:stk?'stuck':done?'done':'',st:dr?'background:#fffbe6':'',c:[`<input type=checkbox ${sel.has(o.id)?'checked':''} onchange="this.checked?sel.add('${o.id}'):sel.delete('${o.id}')">`,esc(o.id)+(o.template&&o.template!='default'?` <span class=dim>[${esc(o.template)}]</span>`:''),(o.preChosen&&o.preChosen.length?`<span title="${esc(o.preChosen.map(c=>c.where+': '+c.station+' → '+c.pre+' ('+c.select+')').join('\n'))}">${esc(o.pairS)} <span class=dim>ⓟ</span></span>`:esc(o.pairS)),
-   o.vsTag?`<span style="background:#e6f0ff;padding:0 3px;font-size:11px">${esc(o.vsTag)}</span>`:'<span class=dim>-</span>',esc(o.vehicle||'')+(o.group?`${o.vehicle?' ':''}<span style="background:#eef7e6;padding:0 3px;font-size:11px" title="${t('disp.groupTip')}">${t('ord.grp')}:${esc(o.group)}</span>`:''),dr?`<b style=color:#a60>${t('state.draft')}</b>`:o.state=='FAILED'?`<b style=color:#e67e00 title="${t('ord.failedTip')}">FAILED</b>`:esc(o.state),esc(o.blocks||''),fmtTs(o._created),dr?`<span class=dim>${t('ord.genAgo',{t:fmt(o.age)})}</span>`:fmt(age),dr?'':idle==null?{h:'<span class=dim>-</span>',title:t('ord.noVehTip')}:{h:fmt(idle),title:''},dr?'':{h:fmtTs(o.started),title:o.startedSrc=='rds'?t('ord.backfillTip'):''},dr?'':{h:fmtTs(o.ended),title:o.endedSrc=='rds'?t('ord.backfillTip'):''},dr?'':{h:fmtDur(dur),title:o.ended?'':t('ord.inprog')},esc(o.error||''),
+   o.vsTag?`<span style="background:#e6f0ff;padding:0 3px;font-size:11px">${esc(o.vsTag)}</span>`:'<span class=dim>-</span>',esc(o.vehicle||'')+(o.group?`${o.vehicle?' ':''}<span style="background:#eef7e6;padding:0 3px;font-size:11px" title="${t('disp.groupTip')}">${t('ord.grp')}:${esc(o.group)}</span>`:''),dr?`<b style=color:#a60>${t('state.draft')}</b>`:o.state=='FAILED'?`<b style=color:#e67e00 title="${t('ord.failedTip')}">FAILED</b>`:o.gone?`<b style=color:#a0a title="${esc(t('ord.goneTip')+' '+(o.goneMsg||''))}">${esc(o.state)} (${t('ord.gone')})</b>`:esc(o.state),esc(o.blocks||''),fmtTs(o._created),dr?`<span class=dim>${t('ord.genAgo',{t:fmt(o.age)})}</span>`:fmt(age),dr?'':idle==null?{h:'<span class=dim>-</span>',title:t('ord.noVehTip')}:{h:fmt(idle),title:''},dr?'':{h:fmtTs(o.started),title:o.startedSrc=='rds'?t('ord.backfillTip'):''},dr?'':{h:fmtTs(o.ended),title:o.endedSrc=='rds'?t('ord.backfillTip'):''},dr?'':{h:fmtDur(dur),title:o.ended?'':t('ord.inprog')},esc(o.error||''),
    `<button onclick="toggleJson('${o.id}')">${jsonOpen.has(o.id)?t('ord.hide'):t('ord.view')}</button>`]});
   if(jsonOpen.has(o.id))items.push({k:'json:'+o.id,c:['',{h:`<pre class=jbox style="margin:0;max-height:300px;overflow:auto;background:#f6f6f6;font-size:11px">${esc(jsonCache[o.id]||t('msg.loading'))}</pre>`,span:14}]})}}
  syncRows(ordTable.tBodies[0],items);

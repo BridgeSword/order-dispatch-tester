@@ -8,7 +8,7 @@ from . import rds_scene
 class RdsAdapter(DispatcherAdapter):
     name = "rds"
     # FAILED is deliberately NOT terminal: an RDS order can be resumed after FAILED, keep polling it.
-    terminal_states = frozenset({"FINISHED", "STOPPED", "MANUAL_FINISHED", "CANCELED", "CANCELLED", "SKIPPED"})
+    terminal_states = frozenset({"FINISHED", "STOPPED", "MANUAL_FINISHED", "CANCELED", "CANCELLED", "WITHDRAWN", "TERMINATED", "SKIPPED"})
 
     # ------------------------------------------------------------ payload
     def build_payload(self, order):
@@ -57,6 +57,9 @@ class RdsAdapter(DispatcherAdapter):
 
     def order_status(self, order_id, quiet=True, timeout=8):
         st, js, _ = self.request("GET", "/orderDetails/" + order_id, timeout=timeout, quiet=quiet)
+        if isinstance(js, dict) and not (js.get("id") or "state" in js) and (
+                js.get("code") == 50002 or "empty" in str(js.get("msg", "")).lower() or "not found" in str(js.get("msg", "")).lower()):
+            return {"missing": True, "msg": str(js.get("msg") or js.get("code"))}  # RDS no longer knows the order (withdrawn/deleted)
         if not (isinstance(js, dict) and (js.get("id") or "state" in js)): return None
         bl = [b for b in (js.get("blocks") or []) if isinstance(b, dict)]
         return {"state": js.get("state"), "vehicle": js.get("vehicle") or "",
