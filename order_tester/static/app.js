@@ -233,7 +233,7 @@ function draw(){X.setTransform(1,0,0,1,0,0);X.clearRect(0,0,C.width,C.height);X.
  if($('ly_rt').checked&&geom){X.strokeStyle='#2a8a8a';X.lineWidth=1.2;X.beginPath();for(const c of geom.curves){let p=c.p;X.moveTo(tx(p[0][0]),ty(p[0][1]));for(let i=1;i<p.length;i++)X.lineTo(tx(p[i][0]),ty(p[i][1]))}X.stroke();
   if(view.s>12){X.fillStyle='#2a8a8a';for(const c of geom.curves){let p=c.p,m=Math.floor(p.length/2),a=p[Math.max(0,m-1)],b=p[Math.min(p.length-1,m)];let ang=Math.atan2(-(b[1]-a[1]),b[0]-a[0]),cx=tx((a[0]+b[0])/2),cy=ty((a[1]+b[1])/2);
    X.beginPath();X.moveTo(cx+6*Math.cos(ang),cy+6*Math.sin(ang));X.lineTo(cx+6*Math.cos(ang+2.5),cy+6*Math.sin(ang+2.5));X.lineTo(cx+6*Math.cos(ang-2.5),cy+6*Math.sin(ang-2.5));X.fill()}}}
- if($('ly_st').checked)drawStations();
+ if($('ly_st').checked)drawStations();if($('ly_dir')&&$('ly_dir').checked)drawHeadings();
  if($('ly_rb').checked)for(const r of robotsCache){if(r.x==null)continue;let stk=r.idle>+$('still').value&&r.orderActive;X.fillStyle=stk?'red':r.orderActive?'#f80':'#fc0';X.strokeStyle='#000';
   X.fillRect(tx(r.x)-7,ty(r.y)-7,14,14);X.strokeRect(tx(r.x)-7,ty(r.y)-7,14,14);X.fillStyle='#000';X.font='bold 12px sans-serif';X.fillText(r.name+(r.orderActive?' ['+r.order+' '+(r.orderState||'')+']':'')+(stk?' ⚠':''),tx(r.x)+9,ty(r.y)+12);X.font='11px sans-serif'}}
 // stations: each pool its colour; station in 2+ pools = split + purple ring; pre-points lighter + dashed line to the station
@@ -243,6 +243,13 @@ function lbl(s,x,y,c){X.save();X.font='bold 12px sans-serif';X.lineWidth=3;X.str
 function dot(x,y,r,c1,c2,ring){X.save();if(c2&&c2!==c1){X.fillStyle=c1;X.beginPath();X.arc(x,y,r,Math.PI/2,Math.PI*1.5);X.fill();X.fillStyle=c2;X.beginPath();X.arc(x,y,r,-Math.PI/2,Math.PI/2);X.fill()}
  else{X.fillStyle=c1;X.beginPath();X.arc(x,y,r,0,7);X.fill()}X.lineWidth=ring?2.5:1.5;X.strokeStyle=ring||'#fff';X.beginPath();X.arc(x,y,r,0,7);X.stroke();X.restore()}
 const light=c=>c+'70';
+function drawHeadings(){/* station heading arrows (scene 'dir', radians); stations without an angle are not touched */
+ X.save();X.strokeStyle='#7a3db8';X.fillStyle='#7a3db8';X.lineWidth=1.5;const L=12;
+ for(const s of (allSt.length?allSt:stations)){if(s.x==null||typeof s.dir!='number')continue;let x=tx(s.x),y=ty(s.y),c=Math.cos(s.dir),n=Math.sin(s.dir),ex=x+L*c,ey=y-L*n;
+  let col=s.ignoreDir?'#b9a6cf':'#7a3db8';X.strokeStyle=col;X.fillStyle=col;X.beginPath();X.moveTo(x,y);X.lineTo(ex,ey);X.stroke();X.beginPath();X.moveTo(ex,ey);X.lineTo(ex-5*c+3*n,ey+5*n+3*c);X.lineTo(ex-5*c-3*n,ey+5*n-3*c);X.closePath();X.fill()}
+ X.restore()}
+function hoverSt(e){if(!$('ly_st').checked){C.title='';return}let best=null,bd=144;for(const s of (allSt.length?allSt:stations)){if(s.x==null)continue;let d=(tx(s.x)-e.offsetX)**2+(ty(s.y)-e.offsetY)**2;if(d<bd){bd=d;best=s}}
+ let tt=best?best.name+' ('+best.type+')'+(typeof best.dir=='number'?' · '+t('map.angle')+' '+(best.dirDeg!=null?best.dirDeg:(best.dir*180/Math.PI).toFixed(1))+'°'+(best.ignoreDir?' ('+t('map.ignoreDir')+')':''):''):'';if(C.title!==tt)C.title=tt}
 function drawStations(){let pn=poolNames(),inP={},pre={};
  for(const r of pn)for(const n of pools[r]||[]){(inP[n]=inP[n]||[]).push(r);let p=preOf(n);if(p){pre[p]=pre[p]||{};(pre[p][r]=pre[p][r]||[]).push(n)}}
  for(const s of (allSt.length?allSt:stations)){if(s.x==null||inP[s.name]||pre[s.name])continue;
@@ -261,7 +268,7 @@ function drawLegend(pn){let items=pn.map(r=>['dot',pcol(r),null,null,`${plab(r)}
  let x0=10,y0=C.height-items.length*17-14;X.save();X.setTransform(1,0,0,1,0,0);X.fillStyle='rgba(255,255,255,.88)';X.strokeStyle='#bbb';X.fillRect(x0,y0,200,items.length*17+8);X.strokeRect(x0,y0,200,items.length*17+8);
  X.font='12px sans-serif';items.forEach((it,i)=>{let y=y0+13+i*17,cx=x0+12;if(it[0]=='pre'){X.save();X.setLineDash([4,3]);X.strokeStyle=it[3];X.beginPath();X.moveTo(cx+5,y);X.lineTo(cx+16,y);X.stroke();X.restore();dot(cx,y,4.5,it[1],null,it[3])}
   else if(it[1]=='#06c'||it[1]=='#999'){X.fillStyle=it[1];X.beginPath();X.arc(cx,y,3,0,7);X.fill()}else dot(cx,y,6,it[1],it[2],it[3]);X.fillStyle='#222';X.fillText(it[4],x0+30,y+4)});X.restore()}
-let drag=null;C.onmousedown=e=>drag={x:e.offsetX,y:e.offsetY,m:0};C.onmousemove=e=>{if(!drag)return;let dx=e.offsetX-drag.x,dy=e.offsetY-drag.y;if(Math.abs(dx)+Math.abs(dy)>2)drag.m=1;view.ox+=dx;view.oy+=dy;drag.x=e.offsetX;drag.y=e.offsetY;draw()};
+let drag=null;C.onmousedown=e=>drag={x:e.offsetX,y:e.offsetY,m:0};C.onmousemove=e=>{if(!drag){hoverSt(e);return}let dx=e.offsetX-drag.x,dy=e.offsetY-drag.y;if(Math.abs(dx)+Math.abs(dy)>2)drag.m=1;view.ox+=dx;view.oy+=dy;drag.x=e.offsetX;drag.y=e.offsetY;draw()};
 C.onmouseup=e=>{if(drag&&!drag.m&&$('ly_st').checked){let best=null,bd=144;for(const s of (allSt.length?allSt:stations)){if(s.x==null)continue;let d=(tx(s.x)-e.offsetX)**2+(ty(s.y)-e.offsetY)**2;if(d<bd){bd=d;best=s}}if(best)pick(best.name)}drag=null};
 C.onmouseleave=()=>drag=null;
 C.onwheel=e=>{e.preventDefault();let f=e.deltaY<0?1.2:1/1.2;view.ox=e.offsetX-(e.offsetX-view.ox)*f;view.oy=e.offsetY-(e.offsetY-view.oy)*f;view.s*=f;draw()};

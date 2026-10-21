@@ -44,7 +44,7 @@ class E2ETest(unittest.TestCase):
         # "restart": wipe memory, re-init on the same data dir; RDS still failing -> served from disk
         C.S.update(geom=None, prepoints={}, groups=[], robot_group={}); C.S.pop("st_cache", None)
         C.init(C.P["data"], base=C.AD().base)
-        c = call(self.port, "/api/scene_geom?cached=1"); self.assertTrue(c["fromCache"]); self.assertEqual(c["loadedAt"], g["loadedAt"]); self.assertEqual(len(c["stations"]), 24)
+        c = call(self.port, "/api/scene_geom?cached=1"); self.assertEqual({s["name"]: s.get("dirDeg") for s in c["stations"]}.get("AP1"), 90.0); self.assertTrue(c["fromCache"]); self.assertEqual(c["loadedAt"], g["loadedAt"]); self.assertEqual(len(c["stations"]), 24)
         self.assertEqual(C.S["prepoints"].get("AP1"), "LM1")
         st = call(self.port, "/api/stations"); self.assertTrue(st["ok"]); self.assertEqual(len(st["stations"]), 24)
 

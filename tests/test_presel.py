@@ -97,4 +97,15 @@ class PreSelectTest(unittest.TestCase):
         rec = C.make_draft({"start": "AP1"}, t, cfg)
         self.assertEqual(rec["body"]["blocks"][0]["location"], "LM2"); self.assertEqual(rec["preChosen"][0]["select"], "index=2")
 
+class StationHeadingTest(unittest.TestCase):
+    def test_dir_parsed_and_kept(self):
+        js = {"scene": {"areas": [{"logicalMap": {"advancedPoints": [
+            dict(P("ActionPoint", "A", 0, 0), dir=1.5707963, ignoreDir=True), dict(P("ActionPoint", "B", 1, 0), angle=-3.14159265),
+            P("LocationMark", "C", 2, 0), dict(P("ActionPoint", "D", 3, 0), dir=True), dict(P("ActionPoint", "E", 4, 0), dir="90")]}}]}}
+        st = {p["name"]: p for p in rds_scene.parse_scene(js)}
+        self.assertEqual((st["A"]["dir"], st["A"]["dirDeg"], st["A"]["dirField"]), (1.570796, 90.0, "dir"))
+        self.assertEqual((st["B"]["dirDeg"], st["B"]["dirField"]), (-180.0, "angle"))
+        self.assertTrue(st["A"]["ignoreDir"]); self.assertNotIn("ignoreDir", st["B"])
+        for n in "CDE": self.assertNotIn("dir", st[n], n)
+
 if __name__ == "__main__": unittest.main()

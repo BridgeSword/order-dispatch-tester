@@ -3,6 +3,8 @@
 import io, json, math, zipfile
 
 # ---------- scene parsing ----------
+ANGLE_KEYS = ("dir", "angle", "theta", "yaw")
+
 def parse_scene(js):
     pts = {}; curves = []
     def walk(o):
@@ -10,6 +12,12 @@ def parse_scene(js):
             name = o.get("instanceName"); cls = o.get("className")
             if name and isinstance(o.get("pos"), dict) and cls and not isinstance(o.get("startPos"), dict):
                 p = pts.setdefault(name, {"name": name, "type": cls, "x": o["pos"].get("x"), "y": o["pos"].get("y"), "bins": [], "props": {}})
+                for ak in ANGLE_KEYS:  # station heading (RDS: "dir", radians); kept only if numeric
+                    av = o.get(ak)
+                    if isinstance(av, (int, float)) and not isinstance(av, bool) and "dir" not in p:
+                        p["dir"] = round(float(av), 6); p["dirDeg"] = round(math.degrees(float(av)), 1); p["dirField"] = ak
+                        break
+                if o.get("ignoreDir") is True and "dir" in p: p["ignoreDir"] = True
                 for prop in o.get("property", []) or []:
                     if isinstance(prop, dict) and prop.get("key"):
                         v = prop.get("stringValue")

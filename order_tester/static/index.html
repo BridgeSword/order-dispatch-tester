@@ -49,7 +49,7 @@
 </div>
 <div id=tab-map class=tab><div id=maptool>
  <span data-i18n=map.layers></span> <label><input type=checkbox id=ly_pc checked onchange=draw()><span data-i18n=map.pc></span></label><select id=pcsize onchange=draw() data-i18n-title=map.pcSizeTip><option value=1 data-i18n=map.pcThin></option><option value=2 data-i18n=map.pcMed></option><option value=3 data-i18n=map.pcBold></option><option value=4 data-i18n=map.pcXBold></option></select> <label><input type=checkbox id=ly_rt checked onchange=draw()><span data-i18n=map.rt></span></label>
- <label><input type=checkbox id=ly_st checked onchange=draw()><span data-i18n=map.st></span></label><label><input type=checkbox id=ly_rb checked onchange=draw()><span data-i18n=map.rb></span></label>
+ <label><input type=checkbox id=ly_st checked onchange=draw()><span data-i18n=map.st></span></label><label><input type=checkbox id=ly_dir checked onchange=draw()><span data-i18n=map.dir></span></label><label><input type=checkbox id=ly_rb checked onchange=draw()><span data-i18n=map.rb></span></label>
  <button onclick=fitAll() data-i18n=map.fit></button>
  | <span data-i18n=map.click></span> <span id=pm_box></span>
  | <span data-i18n=map.upload></span> <input type=file id=smapf accept=".smap,.json" onchange=uploadSmap()> <span data-i18n=map.orPath></span> <input id=smap_path size=28 placeholder="D:\maps\xxx.smap"><button onclick=useSmapPath() data-i18n=btn.use></button>

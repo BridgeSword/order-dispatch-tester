@@ -11,7 +11,9 @@ DOWNLOAD_SCENE = b""  # zip bytes served by /downloadScene (tests); empty -> 404
 def scene():
     pts = []; curves = []
     for i in range(1, 13):
-        pts.append({"className": "ActionPoint", "instanceName": "AP%d" % i, "pos": {"x": i * 2.0, "y": 0.0}})
+        ap = {"className": "ActionPoint", "instanceName": "AP%d" % i, "pos": {"x": i * 2.0, "y": 0.0}}
+        if i % 2: ap["dir"] = 1.5707963  # odd APs carry a heading (radians, like RDS)
+        pts.append(ap)
         pts.append({"className": "LocationMark", "instanceName": "LM%d" % i, "pos": {"x": i * 2.0, "y": 2.0}})
         curves.append({"className": "StraightPath", "instanceName": "LM%d-AP%d" % (i, i),
                        "startPos": {"instanceName": "LM%d" % i, "pos": {"x": i * 2.0, "y": 2.0}}, "endPos": {"instanceName": "AP%d" % i, "pos": {"x": i * 2.0, "y": 0.0}}})
