@@ -8,6 +8,7 @@
  "btn.retry": "重试",
  "btn.save": "保存",
  "btn.use": "使用",
+ "busy.scene": "正在加载场景… (/scene 可能需要 30-60 秒)",
  "cfg.adapter": "调度适配器",
  "cfg.base": "调度系统地址",
  "cfg.lang": "界面语言",

@@ -90,7 +90,7 @@ D = {
  "run.on": ("运行中", "Running"), "run.off": ("已停止", "Idle"), "run.sent": ("已发送", "sent"), "run.log": ("日志", "log"),
  "msg.loading": ("加载中...", "Loading..."), "msg.loaded": ("已加载保存的设置", "Saved settings loaded"), "msg.fromLocal": ("已从浏览器缓存恢复设置", "Settings restored from browser cache"),
  "msg.loadedScene": ("已加载保存的设置 · 场景站点 {n}", "Settings loaded · {n} scene stations"), "msg.nStations": ("站点数 {n}", "{n} stations"),
- "msg.sceneLoading": ("加载场景站点 (/scene 可能需要 30-60 秒)...", "Loading scene stations (/scene can take 30-60 s)..."), "msg.sceneFail": ("场景加载失败", "Scene load failed"),
+ "msg.sceneLoading": ("加载场景站点 (/scene 可能需要 30-60 秒)...", "Loading scene stations (/scene can take 30-60 s)..."), "msg.sceneFail": ("场景加载失败", "Scene load failed"), "busy.scene": ("正在加载场景… (/scene 可能需要 30-60 秒)", "Loading scene… (/scene can take 30-60 s)"),
  "msg.pasted": ("粘贴 {n} 个", "{n} pasted"), "msg.noSceneCoords": ("(场景未加载, 无法解析坐标/前置点)", "(scene not loaded: no positions / pre-points)"), "msg.notInScene": ("场景中未找到", "not in scene"),
  # server side
  "srv.noPoolStep": ("模板中没有使用站点池的步骤", "The template has no pool-based step"), "srv.poolEmpty": ("站点池为空: {pools}", "Empty pool(s): {pools}"),

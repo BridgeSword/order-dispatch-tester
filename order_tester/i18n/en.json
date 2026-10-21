@@ -8,6 +8,7 @@
  "btn.retry": "Retry",
  "btn.save": "Save",
  "btn.use": "Use",
+ "busy.scene": "Loading scene… (/scene can take 30-60 s)",
  "cfg.adapter": "Dispatcher adapter",
  "cfg.base": "Dispatcher URL",
  "cfg.lang": "Language",

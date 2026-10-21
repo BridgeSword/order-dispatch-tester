@@ -5,6 +5,8 @@ Orders progress CREATED -> RUNNING -> FINISHED (order ids containing 'fail' go F
 import argparse, io, json, threading, time, zipfile
 from http.server import ThreadingHTTPServer, BaseHTTPRequestHandler
 
+SCENE_DELAY, SCENE_FAIL = 0, False
+
 def scene():
     pts = []; curves = []
     for i in range(1, 13):
@@ -31,7 +33,10 @@ class H(BaseHTTPRequestHandler):
         b = json.dumps(o).encode(); self.send_response(code); self.send_header("Content-Type", "application/json"); self.send_header("Content-Length", str(len(b))); self.end_headers(); self.wfile.write(b)
     def do_GET(self):
         p = self.path
-        if p == "/scene": return self.js(scene())
+        if p == "/scene":
+            time.sleep(SCENE_DELAY)
+            if SCENE_FAIL: return self.js({"err": "fake scene failure"}, 500)
+            return self.js(scene())
         if p == "/downloadScene": self.send_response(404); self.end_headers(); return
         if p.startswith("/orderDetails/"):
             oid = p.split("/", 2)[2]
@@ -65,5 +70,6 @@ def serve(port):
     srv = ThreadingHTTPServer(("127.0.0.1", port), H); threading.Thread(target=srv.serve_forever, daemon=True).start(); return srv
 
 if __name__ == "__main__":
-    ap = argparse.ArgumentParser(); ap.add_argument("--port", type=int, default=18088); a = ap.parse_args()
+    ap = argparse.ArgumentParser(); ap.add_argument("--port", type=int, default=18088); ap.add_argument("--scene-delay", type=float, default=0); ap.add_argument("--scene-fail", action="store_true"); a = ap.parse_args()
+    SCENE_DELAY, SCENE_FAIL = a.scene_delay, a.scene_fail
     print("fake RDS on http://127.0.0.1:%d" % a.port); serve(a.port).serve_forever()

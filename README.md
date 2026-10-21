@@ -2,6 +2,9 @@
 
 [中文说明 / Chinese](README.zh-CN.md)
 
+> Detailed usage guide (Chinese): [docs/USAGE.zh.md](docs/USAGE.zh.md) — keep it updated with every feature change.
+
+
 A small, stdlib-only Python web tool for **stress / deadlock testing of AGV dispatch systems**.
 It generates test orders from configurable **order templates**, sends them in throttled batches,
 monitors every order and vehicle, and highlights orders that look stuck (possible deadlocks).

@@ -38,12 +38,15 @@ async function initSettings(){let st=null,fromLocal=false;try{st=await (await fe
  $('info').textContent=st&&Object.keys(st).length?(fromLocal?t('msg.fromLocal'):t('msg.loaded')):'';if(fromLocal)saveNow()}
 function saveCfg(){if(!loaded)return post('/api/config',{base:$('base').value,pollSec:+$('poll').value});let st=collect();try{localStorage.setItem('odtSettings',JSON.stringify(st))}catch(e){}
  return post('/api/config',{base:st.base,pollSec:st.pollSec,settings:st})}
-async function loadSt(){saveCfg();$('info').textContent=t('msg.loading');let r=await (await fetch('/api/stations')).json();
+async function loadSt(){saveCfg();$('info').textContent=t('msg.loading');let r;try{r=await sceneFetch('/api/stations?refresh=1')}catch(e){$('info').textContent=t('msg.sceneFail')+': '+e;return}
  if(!r.ok){$('info').textContent=r.err;return}setScene(r.stations);stations=r.stations;$('info').textContent=t('msg.nStations',{n:stations.length});fitAll();renderSt();renderPool();prevLater()}
 function setScene(list){allSt=list||[];stMap={};for(const s of allSt)stMap[s.name]=s}
+let busyN=0;function busy(on){busyN=Math.max(0,busyN+(on?1:-1));const o=$('busy');if(!o)return;if(busyN){$('busytxt').textContent=t('busy.scene');o.classList.add('on');if(document.activeElement)document.activeElement.blur()}else o.classList.remove('on')}
+document.addEventListener('keydown',e=>{if(busyN){e.preventDefault();e.stopPropagation()}},true);
+async function sceneFetch(url){busy(true);try{let r=await (await fetch(url)).json();if(!r.ok)alert(t('msg.sceneFail')+': '+(r.err||''));return r}catch(e){alert(t('msg.sceneFail')+': '+e);throw e}finally{busy(false)}}
 let sceneP=null;
 async function ensureScene(){if(allSt.length)return true;if(sceneP)return sceneP;$('info').textContent=t('msg.sceneLoading');
- sceneP=(async()=>{try{let r=await (await fetch('/api/stations')).json();if(!r.ok){$('info').innerHTML=`<b style=color:red>${t('msg.sceneFail')}: ${esc(r.err)}</b> <button onclick="ensureScene().then(()=>{renderSt();renderPool()})">${t('btn.retry')}</button>`;return false}
+ sceneP=(async()=>{try{let r=await sceneFetch('/api/stations');if(!r.ok){$('info').innerHTML=`<b style=color:red>${t('msg.sceneFail')}: ${esc(r.err)}</b> <button onclick="ensureScene().then(()=>{renderSt();renderPool()})">${t('btn.retry')}</button>`;return false}
   setScene(r.stations);if(stations.some(s=>s.missing||s.x==null))stations=stations.map(s=>stMap[s.name]?{...stMap[s.name]}:{...s,missing:true});return true}
   catch(e){$('info').innerHTML=`<b style=color:red>${t('msg.sceneFail')}: ${esc(e)}</b>`;return false}finally{sceneP=null}})();return sceneP}
 async function usePaste(){let names=[...new Set($('paste').value.split(/[\s,，;；]+/).filter(x=>x))];await ensureScene();
@@ -185,7 +188,7 @@ function showTab(tb){if(!['cfg','map','rob','ord'].includes(tb))tb='cfg';$('tab'
  document.querySelectorAll('#tabbar button').forEach(b=>b.classList.toggle('on',b.dataset.t==tb));saveLater();if(tb=='map'){let first=!C.dataset.sized;resizeMap();if(first)fitAll()}}
 function resizeMap(){if($('tab').value!='map')return;let top=C.getBoundingClientRect().top;C.width=Math.max(300,document.documentElement.clientWidth-16);C.height=Math.max(200,window.innerHeight-top-10);C.dataset.sized=1;draw()}
 window.addEventListener('resize',resizeMap);
-async function loadGeom(refresh){$('geominfo').textContent=t('map.loadingGeom');let r;try{r=await (await fetch('/api/scene_geom'+(refresh?'?refresh=1':''))).json()}catch(e){$('geominfo').textContent=t('map.geomFail')+' '+e;return}
+async function loadGeom(refresh){$('geominfo').textContent=t('map.loadingGeom');let r;try{r=await sceneFetch('/api/scene_geom'+(refresh?'?refresh=1':''))}catch(e){$('geominfo').textContent=t('map.geomFail')+' '+e;return}
  if(!r.ok){$('geominfo').textContent=r.err||t('map.geomFail');return}setGeom(r)}
 function setGeom(r){geom=r;if(r.stations&&r.stations.length){if(!allSt.length)setScene(r.stations);if(!stations.length){stations=r.stations;}
  else if(stations.some(s=>s.missing||s.x==null))stations=stations.map(s=>stMap[s.name]?{...stMap[s.name]}:{...s,missing:true});renderSt();renderPool();prevLater()}buildPC();$('geominfo').innerHTML=t('map.geomInfo',{c:r.curves.length,cs:r.curveSrc?' ('+esc(r.curveSrc)+')':'',p:r.npoints,ps:r.pointSrc?' ('+esc(r.pointSrc)+')':''})+(r.notes&&r.notes.length?` <span style=color:#a60 title="${esc(r.notes.join('\n'))}">⚠${esc(r.notes[r.notes.length-1])}</span>`:'');
@@ -245,7 +248,7 @@ function dispCfg(){return {base:$('base').value,vehicle:$('veh').value.trim(),gr
 async function generate(){if(dirty&&!(await saveTpl()))return;let roles=cur.pools||[];
  let empty=roles.filter(r=>!(pools[r]||[]).length);if(empty.length){alert(t('gen.poolEmpty',{p:empty.map(plab).join(', ')}));return}
  if($('noself').checked&&roles.length>1&&roles.every(r=>pools[r].length==1)&&new Set(roles.map(r=>pools[r][0])).size<roles.length){alert(t('gen.sameOnly'));return}
- let need=needRoles(),miss=[];if(allSt.length)for(const r of need){let m=(pools[r]||[]).filter(e=>!preOf(e));if(m.length)miss.push(plab(r)+': '+m.join(', '))}
+ let need=needRoles(),miss=[];if(need.size&&!allSt.length&&!(await ensureScene()))return;if(allSt.length)for(const r of need){let m=(pools[r]||[]).filter(e=>!preOf(e));if(m.length)miss.push(plab(r)+': '+m.join(', '))}
  if(miss.length&&!confirm(t('gen.missQ',{list:miss.join('\n')})))return;
  $('genmsg').textContent=t('gen.running');$('genmsg2').textContent=t('gen.running');
  let r=await post('/api/generate',Object.assign(dispCfg(),{templateName:cur.name,pools,strategy:$('strategy').value,noSelf:$('noself').checked,noReuse:$('noreuse').checked,count:+$('cnt').value,settings:collect()}));
