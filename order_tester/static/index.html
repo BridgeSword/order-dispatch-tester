@@ -10,19 +10,21 @@
 .poolrow{margin:2px 0}.poolrow .pn{display:inline-block;min-width:60px;font-weight:bold}
 #steps td{vertical-align:top}#steps tr.off{opacity:.5}#steps tr.drag{outline:2px dashed #69c}#steps textarea{width:100%;box-sizing:border-box;font:11px monospace}
 .hdl{cursor:grab;user-select:none;color:#888;font-size:16px}#tpl_prev{max-height:340px;overflow:auto;background:#f6f6f6;font-size:11px;margin:0}.err{color:#c00}.ok{color:green}
-#langsel{margin-left:auto}</style></head><body>
+#langsel{margin-left:auto}#subbar{display:flex;gap:4px;align-items:center;flex-wrap:wrap;border-bottom:1px solid #69c;padding:2px 0 4px;margin-bottom:4px;position:sticky;top:0;background:#fff;z-index:5}#subbar>button[data-s]{padding:3px 12px;border:1px solid #69c;background:#eef3fa;cursor:pointer}#subbar>button.on{background:#69c;color:#fff;font-weight:bold}#cfgsum{margin-left:12px;font-size:12px}.sub{display:none}.sub.on{display:block}</style></head><body>
 <div id=tabbar><b style="margin-right:8px" data-i18n=app.title></b><button data-t=cfg onclick="showTab('cfg')" data-i18n=tab.cfg></button><button data-t=map onclick="showTab('map')" data-i18n=tab.map></button><button data-t=rob onclick="showTab('rob')" id=tb_rob></button><button data-t=ord onclick="showTab('ord')" id=tb_ord></button>
 <input type=hidden id=tab value=cfg><span id=run></span><select id=langsel onchange=setLang(this.value) title="Language / 语言"><option value=zh>中文</option><option value=en>English</option></select></div>
 <div id=tab-cfg class=tab>
-<fieldset><legend data-i18n=cfg.legend></legend><span data-i18n=cfg.base></span> <input id=base size=28 value="http://127.0.0.1:8088"> <span data-i18n=cfg.poll></span> <input id=poll type=number value=2>
+<div id=subbar><button data-s=conn onclick="showSub('conn')" data-i18n=sub.conn></button><button data-s=pool onclick="showSub('pool')" data-i18n=sub.pool></button><button data-s=tpl onclick="showSub('tpl')" data-i18n=sub.tpl></button><button data-s=gen onclick="showSub('gen')" data-i18n=sub.gen></button>
+ <span id=cfgsum></span> <button onclick=generate() style="background:#cfc" data-i18n=gen.btn></button> <span id=genmsg2></span></div>
+<fieldset class=sub data-sub=conn><legend data-i18n=cfg.legend></legend><span data-i18n=cfg.base></span> <input id=base size=28 value="http://127.0.0.1:8088"> <span data-i18n=cfg.poll></span> <input id=poll type=number value=2>
  <span data-i18n=cfg.stuck></span> <input id=stuck type=number value=60> <span data-i18n=cfg.still></span> <input id=still type=number value=60>
- <button onclick=saveCfg() data-i18n=btn.save></button> <span class=dim id=adapterinfo></span> <span id=info></span></fieldset>
-<fieldset><legend data-i18n=st.legend></legend><button onclick=loadSt() data-i18n=st.load></button>
+ <button onclick=saveCfg() data-i18n=btn.save></button> <span class=dim id=adapterinfo></span> <span data-i18n=cfg.lang></span> <select id=langsel2 onchange=setLang(this.value)><option value=zh>中文</option><option value=en>English</option></select> <span id=info></span></fieldset>
+<fieldset class=sub data-sub=pool><legend data-i18n=st.legend></legend><button onclick=loadSt() data-i18n=st.load></button>
  <span data-i18n=st.search></span> <input id=q oninput=renderSt() size=12> <span data-i18n=st.type></span> <input id=tf oninput=renderSt() size=6 placeholder="AP/LM">
  <details><summary data-i18n=st.paste></summary><textarea id=paste rows=3 cols=40></textarea><button onclick=usePaste() data-i18n=btn.use></button></details>
  <small data-i18n=st.mapHint></small>
  <div id=st></div></fieldset>
-<fieldset><legend data-i18n=pool.legend></legend>
+<fieldset class=sub data-sub=pool><legend data-i18n=pool.legend></legend>
  <div id=pools></div>
  <span data-i18n=pool.add></span> <input id=newpool size=10 placeholder="pallet2"> <button onclick=addPool() data-i18n=btn.add></button>
  | <select id=swa></select> ⇄ <select id=swb></select> <button onclick=swapPools() data-i18n=pool.swap></button> <span class=dim data-i18n=pool.chipHint></span><br>
@@ -30,7 +32,7 @@
  <span data-i18n=gen.strategy></span> <select id=strategy onchange=renderPool()><option value=random data-i18n=gen.random></option><option value=round_robin data-i18n=gen.rr></option><option value=cartesian data-i18n=gen.cart></option></select>
  <label><input type=checkbox id=noself checked onchange=renderPool()><span data-i18n=gen.noself></span></label>
  <label id=noreuse_l><input type=checkbox id=noreuse checked onchange=renderPool()><span data-i18n=gen.noreuse></span></label></fieldset>
-<fieldset style="border:2px solid #69c"><legend><b data-i18n=tpl.legend></b></legend>
+<fieldset class=sub data-sub=tpl style="border:2px solid #69c"><legend><b data-i18n=tpl.legend></b></legend>
  <span data-i18n=tpl.active></span> <select id=tpl_sel onchange=selectTpl(this.value)></select>
  <button onclick=newTpl() data-i18n=tpl.new></button> <button onclick=copyTpl() data-i18n=tpl.copy></button> <button onclick=delTpl() data-i18n=tpl.del></button>
  <button onclick="$('tpl_imp').click()" data-i18n=tpl.import></button><input type=file id=tpl_imp accept=".json" style=display:none onchange=importTpl()> <button onclick=exportTpl() data-i18n=tpl.export></button>
@@ -40,7 +42,7 @@
  <button onclick=addStep() data-i18n=step.add></button> <span class=dim data-i18n=step.varHint></span></div>
  <div id=tpl_rawbox style=display:none><textarea id=tpl_json rows=22 style="width:100%;font:12px monospace" oninput=rawChanged()></textarea></div>
  <details open><summary data-i18n=tpl.preview></summary><span id=prev_info class=dim></span><pre id=tpl_prev></pre></details></fieldset>
-<fieldset><legend data-i18n=disp.legend></legend><span data-i18n=disp.group></span> <select id=grp data-i18n-title=disp.groupTip><option value="" data-i18n=disp.none></option></select> <span data-i18n=disp.veh></span> <input id=veh data-i18n-ph=disp.vehPh size=14> <span data-i18n=disp.pri></span> <input id=pri type=number value=1>
+<fieldset class=sub data-sub=gen><legend data-i18n=disp.legend></legend><span data-i18n=disp.group></span> <select id=grp data-i18n-title=disp.groupTip><option value="" data-i18n=disp.none></option></select> <span data-i18n=disp.veh></span> <input id=veh data-i18n-ph=disp.vehPh size=14> <span data-i18n=disp.pri></span> <input id=pri type=number value=1>
  <span data-i18n=disp.label></span> <input id=label size=14 placeholder="empty-pallet">
  <div class=row><div><span data-i18n=disp.preov></span><br><textarea id=pre_ov rows=4 cols=40 placeholder="AP12=LM12" oninput="renderPool();renderSt();prevLater()"></textarea></div><div><span id=pre_info></span></div></div>
  <span data-i18n=gen.count></span> <input id=cnt type=number value=9 oninput="$('cnt_auto').value='0';renderPool()"><input type=hidden id=cnt_auto value=1> <button onclick="$('cnt_auto').value='1';renderPool()" data-i18n=gen.countAuto data-i18n-title=gen.countAutoTip></button> <button onclick=generate() style="background:#cfc" data-i18n=gen.btn></button> <span class=dim data-i18n=gen.hint></span> <span id=genmsg></span></fieldset>

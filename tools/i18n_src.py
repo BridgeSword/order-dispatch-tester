@@ -6,6 +6,8 @@ D = {
  "tab.cfg": ("配置与派单", "Config & Dispatch"), "tab.map": ("地图", "Map"), "tab.rob": ("机器人", "Robots"), "tab.ord": ("测试订单", "Test Orders"),
  "cfg.legend": ("配置", "Config"), "cfg.base": ("调度系统地址", "Dispatcher URL"), "cfg.poll": ("轮询间隔(秒)", "Poll interval (s)"),
  "cfg.stuck": ("卡死阈值(秒)", "Stuck threshold (s)"), "cfg.still": ("车辆静止阈值(秒)", "Vehicle idle threshold (s)"), "cfg.adapter": ("调度适配器", "Dispatcher adapter"),
+ "sub.conn": ("连接", "Connection"), "sub.pool": ("站点池", "Pools"), "sub.tpl": ("订单模板", "Template"), "sub.gen": ("派单参数与生成", "Dispatch & Generate"),
+ "cfg.lang": ("界面语言", "Language"), "sum.line": ("模板 {tpl} · {pools} · {strat} · 计划 {n} 单", "Template {tpl} · {pools} · {strat} · {n} orders planned"), "sum.noPool": ("(模板未使用站点池)", "(template uses no pool)"),
  "btn.save": ("保存", "Save"), "btn.use": ("使用", "Use"), "btn.add": ("添加", "Add"), "btn.clear": ("清空", "Clear"), "btn.del": ("删除", "Delete"),
  "btn.retry": ("重试", "Retry"), "btn.expandAll": ("全部展开", "Expand all"), "btn.collapseAll": ("全部折叠", "Collapse all"),
  "st.legend": ("站点", "Stations"), "st.load": ("从调度系统场景加载站点", "Load stations from scene"), "st.search": ("搜索", "Search"), "st.type": ("类型", "Type"),

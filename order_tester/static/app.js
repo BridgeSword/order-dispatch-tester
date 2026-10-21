@@ -5,7 +5,7 @@ function t(k,v){let s=I18N[k];if(s==null)s=k;if(v)s=s.replace(/\{(\w+)\}/g,(m,n)
 function applyI18n(){document.documentElement.lang=LANG=='en'?'en':'zh';document.title=t('app.title');
  document.querySelectorAll('[data-i18n]').forEach(e=>e.textContent=t(e.dataset.i18n));
  document.querySelectorAll('[data-i18n-ph]').forEach(e=>e.placeholder=t(e.dataset.i18nPh));
- document.querySelectorAll('[data-i18n-title]').forEach(e=>e.title=t(e.dataset.i18nTitle));$('langsel').value=LANG}
+ document.querySelectorAll('[data-i18n-title]').forEach(e=>e.title=t(e.dataset.i18nTitle));$('langsel').value=LANG;$('langsel2').value=LANG}
 async function loadI18n(){let want=null;try{want=localStorage.getItem('odtLang')}catch(e){}
  let r=await (await fetch('/api/i18n'+(want?'?lang='+want:''))).json();I18N=r.t;LANG=r.lang;applyI18n()}
 async function setLang(l){try{localStorage.setItem('odtLang',l)}catch(e){}await post('/api/config',{lang:l});location.reload()}
@@ -14,7 +14,7 @@ const stName=s=>s==DRAFT?t('state.draft'):s=='其它'?t('state.other'):s;
 let allSt=[],stMap={},stations=[],pools={start:[],end:[]},view={s:1,ox:0,oy:0},sel=new Set();
 const $=id=>document.getElementById(id);
 async function post(u,b){return (await fetch(u,{method:'POST',body:JSON.stringify(b)})).json()}
-const NOSAVE=new Set(['q','tf','paste','hidedone','smapf','f_veh','f_grp','f_st','f_id','f_stuck','newpool','tpl_raw','tpl_json','tpl_imp','tpl_title','langsel','swa','swb','tpl_sel']);let loaded=false,saveT=null;
+const NOSAVE=new Set(['q','tf','paste','hidedone','smapf','f_veh','f_grp','f_st','f_id','f_stuck','newpool','tpl_raw','tpl_json','tpl_imp','tpl_title','langsel','swa','swb','tpl_sel','langsel2']);let loaded=false,saveT=null;
 function poolNames(){let n=Object.keys(pools);for(const r of (cur&&cur.pools)||[])if(!n.includes(r))n.push(r);return n}
 function collect(){let f={};document.querySelectorAll('input[id],select[id],textarea[id]').forEach(e=>{if(NOSAVE.has(e.id)||e.closest('#steps'))return;f[e.id]=e.type=='checkbox'?e.checked:e.value});
  let pm=document.querySelector('input[name=pm]:checked');
@@ -96,7 +96,7 @@ function addPool(){let n=$('newpool').value.trim();if(!/^[A-Za-z_][\w]*$/.test(n
 function stratCount(){let roles=(cur&&cur.pools)||[],sz=roles.map(r=>(pools[r]||[]).length),s=$('strategy').value;if(!sz.length)return 0;
  if(s=='cartesian'){let ns=$('noself').checked,c=0,tot=sz.reduce((a,b)=>a*b,1);if(tot>200000)return tot;const rec=(i,used)=>{if(i==roles.length){c++;return}for(const x of pools[roles[i]]||[]){if(ns&&used.includes(x))continue;rec(i+1,used.concat([x]))}};rec(0,[]);return c}
  if(s=='round_robin')return Math.max(...sz);return sz[0]}
-function renderPool(){renderPools();if($('cnt_auto').value=='1')$('cnt').value=stratCount();let roles=(cur&&cur.pools)||[],s=$('strategy').value;$('noreuse_l').style.display=s=='random'?'':'none';
+function renderPool(){renderPools();setTimeout(renderSum,0);if($('cnt_auto').value=='1')$('cnt').value=stratCount();let roles=(cur&&cur.pools)||[],s=$('strategy').value;$('noreuse_l').style.display=s=='random'?'':'none';
  $('poolline').innerHTML=t('gen.line.'+s,{pools:roles.map(r=>esc(plab(r))+'('+(pools[r]||[]).length+')').join(' × ')})+t('gen.total',{n:`<span style=color:#06c>${$('cnt').value}</span>`})+(s=='random'&&$('noreuse').checked?' · '+t('gen.noreuseShort'):'');saveLater();
  let need=needRoles();
  if(!allSt.length&&roles.some(r=>(pools[r]||[]).length)){$('pre_info').innerHTML=`<span class=dim>${t('pre.loading')}</span>`;draw();return}
@@ -107,6 +107,12 @@ function renderPool(){renderPools();if($('cnt_auto').value=='1')$('cnt').value=s
 function stepRef(S,id){let s=S.find(x=>x.id==id);if(s)return s;let m=/^(?:step)?(\d+)$/.exec(id||'');return m?S[+m[1]-1]||null:null}
 function needRoles(){let n=new Set();if(!cur)return n;let S=cur.steps;
  for(const s of S){if(s.enabled===false||s.location.type!='pre')continue;let r=stepRef(S,s.location.step),k=0;while(r&&r.location.type=='pre'&&k++<20)r=stepRef(S,r.location.step);if(r&&r.location.type=='pool')n.add(r.location.pool)}return n}
+// ---------------- config sub-tabs + summary ----------------
+const SUBS=['conn','pool','tpl','gen'];
+function showSub(k){if(!SUBS.includes(k))k='pool';document.querySelectorAll('#tab-cfg .sub').forEach(e=>e.classList.toggle('on',e.dataset.sub==k));
+ document.querySelectorAll('#subbar button[data-s]').forEach(b=>b.classList.toggle('on',b.dataset.s==k));try{localStorage.setItem('odtSub',k)}catch(e){}if(k=='pool')renderSt()}
+function initSub(){let k=null;try{k=localStorage.getItem('odtSub')}catch(e){}showSub(k||'pool')}
+function renderSum(){if(!cur)return;let roles=cur.pools||[];$('cfgsum').innerHTML=t('sum.line',{tpl:`<b>${esc(cur.name)}</b>`,pools:roles.length?roles.map(r=>esc(plab(r))+'('+(pools[r]||[]).length+')').join(' × '):t('sum.noPool'),n:`<b style=color:#06c>${$('cnt').value}</b>`,strat:t($('strategy').selectedOptions[0]?$('strategy').selectedOptions[0].dataset.i18n:'gen.random')})}
 // ---------------- template editor ----------------
 let TPL={},cur=null,tplT=null,prevT=null,dirty=false;
 async function loadTemplates(active){let r=await (await fetch('/api/templates')).json();TPL=r.templates||{};$('adapterinfo').textContent=t('cfg.adapter')+': '+r.adapter;
@@ -241,11 +247,11 @@ async function generate(){if(dirty&&!(await saveTpl()))return;let roles=cur.pool
  if($('noself').checked&&roles.length>1&&roles.every(r=>pools[r].length==1)&&new Set(roles.map(r=>pools[r][0])).size<roles.length){alert(t('gen.sameOnly'));return}
  let need=needRoles(),miss=[];if(allSt.length)for(const r of need){let m=(pools[r]||[]).filter(e=>!preOf(e));if(m.length)miss.push(plab(r)+': '+m.join(', '))}
  if(miss.length&&!confirm(t('gen.missQ',{list:miss.join('\n')})))return;
- $('genmsg').textContent=t('gen.running');
+ $('genmsg').textContent=t('gen.running');$('genmsg2').textContent=t('gen.running');
  let r=await post('/api/generate',Object.assign(dispCfg(),{templateName:cur.name,pools,strategy:$('strategy').value,noSelf:$('noself').checked,noReuse:$('noreuse').checked,count:+$('cnt').value,settings:collect()}));
- if(!r.ok){$('genmsg').textContent='';alert(r.err);return}
+ if(!r.ok){$('genmsg').textContent='';$('genmsg2').textContent='';alert(r.err);return}
  $('genmsg').innerHTML=`<b style=color:green>${t('gen.done',{n:r.n})}</b>`+(r.skipped&&r.skipped.length?` <span style=color:red title="${esc(r.skipped.map(s=>s.err).join('\n'))}">${t('gen.skipped',{n:r.skipped.length})}</span>`:'')+` <button onclick="showTab('ord')">${t('gen.goSend')}</button>`;
- r.ids.forEach(i=>sel.add(i));if(r.warn)alert(r.warn);tick()}
+ $('genmsg2').innerHTML=$('genmsg').innerHTML;r.ids.forEach(i=>sel.add(i));if(r.warn)alert(r.warn);tick()}
 let grpSig='';function fillGroups(groups,keep){let s=$('grp'),cv=keep!=null?keep:s.value,names=(groups||[]).map(g=>g.name);if(cv&&!names.includes(cv))names.push(cv);
  let sig=names.join('|');if(sig===grpSig&&keep==null)return;grpSig=sig;s.innerHTML=`<option value="">${t('disp.none')}</option>`+names.map(n=>`<option value="${esc(n)}">${esc(n)}</option>`).join('');s.value=cv}
 function swapPools(){let a=$('swa').value,b=$('swb').value;if(!a||!b||a==b)return;[pools[a],pools[b]]=[pools[b]||[],pools[a]||[]];renderPool();renderSt();saveNow();prevLater()}
@@ -367,4 +373,4 @@ async function tick(){try{let r=await (await fetch('/api/state')).json();if(r.gr
   if(jsonOpen.has(o.id))items.push({k:'json:'+o.id,c:['',{h:`<pre class=jbox style="margin:0;max-height:300px;overflow:auto;background:#f6f6f6;font-size:11px">${esc(jsonCache[o.id]||t('msg.loading'))}</pre>`,span:14}]})}}
  syncRows(ordTable.tBodies[0],items);
  renderRobots(r,still);draw()}catch(e){console.error(e)}}
-loadI18n().then(()=>{initFilt();return initSettings()}).finally(()=>{setInterval(tick,1500);tick()});
+loadI18n().then(()=>{initFilt();initSub();return initSettings()}).finally(()=>{setInterval(tick,1500);tick()});
