@@ -89,7 +89,7 @@ def validate(t):
         if isinstance(loc, dict) and loc.get("type") == "pre" and resolve_step_ref(steps, loc.get("step")) is None:
             errs.append("step %d: location.step %r not found" % (i + 1, loc.get("step")))
     t.setdefault("version", 1)
-    t["pools"] = pool_roles(t, extra=t.get("pools") if isinstance(t.get("pools"), list) else [])
+    t["pools"] = pool_roles(t)  # only pools referenced by enabled steps
     return errs
 
 def _num(v):
@@ -107,11 +107,25 @@ def resolve_step_ref(steps, ref):
     return None
 
 def pool_roles(t, extra=()):
-    """Pool names used by the template, in step order (this is also the pick order)."""
+    """Pool names the template actually uses, in step order (this is also the pick order).
+    A pool counts only if an enabled pool step uses it, or an enabled pre step derives from a (possibly
+    disabled) pool step. Disabled steps alone do not make a pool required (e.g. end-only templates)."""
+    steps = [s for s in (t.get("steps") or []) if isinstance(s, dict)]
+    used = set()
+    for s in steps:
+        if not s.get("enabled", True): continue
+        loc = s.get("location") or {}
+        if loc.get("type") == "pool" and loc.get("pool"): used.add(loc["pool"])
+        elif loc.get("type") == "pre":
+            ref, seen = resolve_step_ref(steps, loc.get("step")), 0
+            while ref is not None and (ref.get("location") or {}).get("type") == "pre" and seen < 20:
+                ref = resolve_step_ref(steps, ref["location"].get("step")); seen += 1
+            rl = (ref or {}).get("location") or {}
+            if rl.get("type") == "pool" and rl.get("pool"): used.add(rl["pool"])
     out = []
-    for s in t.get("steps") or []:
-        loc = (s or {}).get("location") or {}
-        if loc.get("type") == "pool" and loc.get("pool") and loc["pool"] not in out: out.append(loc["pool"])
+    for s in steps:
+        loc = s.get("location") or {}
+        if loc.get("type") == "pool" and loc.get("pool") in used and loc["pool"] not in out: out.append(loc["pool"])
     for p in extra or []:
         if p and p not in out: out.append(p)
     return out

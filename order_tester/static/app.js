@@ -148,7 +148,8 @@ function setCur(tp){cur=JSON.parse(JSON.stringify(tp));dirty=false;$('tpl_title'
 function selectTpl(n){if(!TPL[n])return;if(dirty)saveTpl();setCur(TPL[n]);saveNow()}
 function tplStatus(s,cls){$('tpl_status').innerHTML=s?`<span class=${cls||'dim'}>${s}</span>`:''}
 function tplChanged(){dirty=true;cur.pools=locPools();tplStatus(t('tpl.unsaved'));clearTimeout(tplT);tplT=setTimeout(saveTpl,700);renderPool();prevLater()}
-function locPools(){let p=[];for(const s of cur.steps)if(s.location&&s.location.type=='pool'&&s.location.pool&&!p.includes(s.location.pool))p.push(s.location.pool);return p}
+function locPools(){let S=cur.steps,u=new Set();for(const s of S){if(s.enabled===false||!s.location)continue;if(s.location.type=='pool'&&s.location.pool)u.add(s.location.pool);else if(s.location.type=='pre'){let r=stepRef(S,s.location.step),k=0;while(r&&r.location.type=='pre'&&k++<20)r=stepRef(S,r.location.step);if(r&&r.location.type=='pool'&&r.location.pool)u.add(r.location.pool)}}
+ let p=[];for(const s of S)if(s.location&&s.location.type=='pool'&&u.has(s.location.pool)&&!p.includes(s.location.pool))p.push(s.location.pool);return p}
 async function saveTpl(){clearTimeout(tplT);cur.pools=locPools();let r=await post('/api/template_save',{template:cur,activate:true});
  if(!r.ok){tplStatus(t('tpl.saveErr')+': '+esc(r.err),'err');return false}TPL[cur.name]=r.template;cur.pools=r.template.pools;dirty=false;tplStatus(t('tpl.saved'),'ok');renderPools();return true}
 function askName(def){let n=prompt(t('tpl.namePrompt'),def||'');if(n==null)return null;n=n.trim();if(!/^[A-Za-z0-9_.\-\u4e00-\u9fff]{1,64}$/.test(n)){alert(t('tpl.badName'));return null}if(TPL[n]&&!confirm(t('tpl.overwriteQ',{n})))return null;return n}

@@ -418,7 +418,7 @@ def make_draft(picks, t, cfg, oid=None):
     first, last = (picks.get(roles[0], ""), picks.get(roles[-1], "")) if roles else ("", "")
     now = time.time(); dpre = pre_point(last, cfg)
     return {"id": body["id"], "pair": [picks[r] for r in roles], "picks": dict(picks), "template": t.get("name"), "adapter": AD().name,
-            "pre": dpre, "dropPre": dpre, "pickPre": pre_point(first, cfg), "preChosen": order.get("preChosen") or [],
+            "pre": dpre, "dropPre": dpre, "pickPre": pre_point(first, cfg) if len(roles) > 1 else "", "preChosen": order.get("preChosen") or [],
             "vsTag": vsTag, "vehicle": body.get("vehicle", ""), "group": body.get("group", ""), "state": DRAFT,
             "sent": now, "changed": now, "created": now, "sig": "", "error": None, "body": body}
 

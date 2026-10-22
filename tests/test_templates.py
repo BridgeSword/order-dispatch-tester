@@ -110,3 +110,35 @@ class CustomPoolTemplateTest(unittest.TestCase):
         self.assertEqual(locs, ["AP7", "AP8"])
         b2, _, _, _, err2 = C.prepare_cfg({"templateName": "RIL-L", "pools": {"start": ["AP1"]}})
         self.assertIn("STP", err2)  # empty template pool is reported even if start is filled
+
+
+def end_only_default():
+    """Ross's laptop default.json: pick (start) steps disabled, only the drop side enabled; stored pools still list start."""
+    t = T.builtin_default(); t["pools"] = ["start", "end"]
+    for s in t["steps"]:
+        if s["id"] in ("pre", "s", "script"): s["enabled"] = False
+    return t
+
+class EndOnlyTemplateTest(unittest.TestCase):
+    def setUp(self): fresh_core(self); C.S["prepoints"] = dict(PREPOINTS)
+
+    def test_roles_ignore_disabled_pool_steps(self):
+        t = end_only_default(); self.assertEqual(T.validate(t), [])
+        self.assertEqual(T.pool_roles(t), ["end"]); self.assertEqual(t["pools"], ["end"])
+        # an enabled pre step deriving from a disabled pool step still needs that pool
+        t2 = end_only_default(); t2["steps"][0]["enabled"] = True; T.validate(t2)
+        self.assertEqual(T.pool_roles(t2), ["start", "end"])
+
+    def test_generate_without_start_pool(self):
+        t = end_only_default(); T.validate(t)
+        b = {"template": t, "pools": {"start": [], "end": ["AP3", "AP4"]}, "strategy": "random", "count": 2}
+        cfg, tt, pools, warn, err = C.prepare_cfg(b)
+        self.assertEqual(err, ""); self.assertEqual(list(pools), ["end"])
+        r = C.generate_drafts(cfg, tt, pools)
+        self.assertEqual(r["n"], 2); self.assertEqual(r["skipped"], [])
+        rec = C.S["orders"][r["ids"][0]]
+        self.assertEqual(len(rec["pair"]), 1); self.assertEqual(rec["pickPre"], "")
+        self.assertIn(rec["pair"][0], [x["location"] for x in rec["body"]["blocks"]])
+        # empty end pool is still rejected
+        cfg, tt, pools, warn, err = C.prepare_cfg({"template": end_only_default(), "pools": {"start": ["AP1"], "end": []}})
+        self.assertIn("end", err); self.assertNotIn("start", err)
