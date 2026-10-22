@@ -4,7 +4,9 @@ Scene: AP1..AP12 with LM1..LM12 pre-points (curve LMn -> APn), robot group grpA 
 Orders progress CREATED -> RUNNING -> FINISHED (order ids containing 'fail' go FAILED, then RUNNING again).
 Incremental orders (setOrder complete=false, then /addBlocks + /markComplete): blocks run one after another,
 BLOCK_DUR s each (a block starts when it exists and its predecessor is FINISHED). All blocks done but not complete
--> order WAITING; complete -> FINISHED. Order ids containing 'bfail' fail their 2nd block (block + order FAILED).
+-> order WAITING; complete -> FINISHED. Order ids containing 'bfail' fail their 2nd block (block + order FAILED);
+'berr' -> 2nd block state Error; 'bmanual' -> 2nd block MANUAL_FINISHED (counts as done). setOrder ids ending in
+'-nocode' get a success response without 'code' (the doc says code 0 or absent = success). Error codes follow the doc (50003).
 INC_EVENTS records every addBlocks/markComplete with the predecessor block state at that moment."""
 import argparse, io, json, threading, time, zipfile
 from http.server import ThreadingHTTPServer, BaseHTTPRequestHandler
@@ -35,17 +37,20 @@ def inc_blocks(o, now=None):
         start = max(cur, b["_added"]); fin = start + BLOCK_DUR
         if now < start: st = "CREATED"
         elif i == 1 and "bfail" in o["id"] and now >= start + BLOCK_DUR / 2: st = "FAILED"
+        elif i == 1 and "berr" in o["id"]: st = "Error"
+        elif i == 1 and "bmanual" in o["id"] and now >= start + BLOCK_DUR / 2: st = "MANUAL_FINISHED"
         elif now >= fin: st = "FINISHED"
         else: st = "STOPPED" if term else "RUNNING"
         out.append((b, st)); cur = fin
-        if st != "FINISHED": dead = True
+        if st not in ("FINISHED", "MANUAL_FINISHED"): dead = True
     return out
 
 def inc_state(o):
     bs = [s for _, s in inc_blocks(o)]
     if o.get("terminated"): return "STOPPED"
     if "FAILED" in bs: return "FAILED"
-    if bs and all(s == "FINISHED" for s in bs): return "FINISHED" if o.get("complete") else "WAITING"
+    if "Error" in bs: return "Error"
+    if bs and all(s in ("FINISHED", "MANUAL_FINISHED") for s in bs): return "FINISHED" if o.get("complete") else "WAITING"
     if any(s in ("RUNNING", "FINISHED") for s in bs): return "RUNNING"
     return "CREATED"
 
@@ -112,12 +117,12 @@ class H(BaseHTTPRequestHandler):
                 now = time.time(); ORDERS[b["id"]] = o = {"id": b["id"], "t": now, "body": b}; RECEIVED.append(b)
                 if b.get("complete") is False:
                     o.update(inc=True, complete=False, blocks=[dict(x, _added=now) for x in b.get("blocks") or []])
-            return self.js({"code": 0})
+            return self.js({"msg": "ok", "create_on": "2022-02-10T18:21:25.073Z"} if b.get("id", "").endswith("-nocode") else {"code": 0, "msg": "ok"})
         if self.path in ("/addBlocks", "/markComplete"):
             with LOCK:
                 o = ORDERS.get(b.get("id"))
-                if not o or not o.get("inc"): return self.js({"code": 60000, "msg": "order not found or not incremental"})
-                if o.get("complete"): return self.js({"code": 60001, "msg": "order already complete"})
+                if not o or not o.get("inc"): return self.js({"code": 50003, "msg": "order doesn't exist"}, 400)
+                if o.get("complete"): return self.js({"code": 50003, "msg": "order is complete"}, 400)
                 bl = inc_blocks(o); prev = bl[-1][1] if bl else None
                 INC_EVENTS.append({"id": o["id"], "path": self.path, "t": time.time(), "prevState": prev, "blocks": [x.get("blockId") for x in b.get("blocks") or []], "n": len(o["blocks"])})
                 if self.path == "/addBlocks":

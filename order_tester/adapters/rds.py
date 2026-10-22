@@ -6,7 +6,12 @@ and for block-by-block dispatch /addBlocks + /markComplete)."""
 #   POST /setOrder     {..., "complete": false, "blocks": [first]}
 #   POST /addBlocks    {"id": <order id>, "blocks": [next], "complete": false}
 #   POST /markComplete {"id": <order id>}
-# success = HTTP 200 and {"code": 0}. An open order whose blocks are all done reports state WAITING (not FINISHED).
+# Checked against the official RDSCore HTTP API doc (Feishu wiki "HTTP API"): success = HTTP 200 and code 0 *or absent*;
+# errors 40000/50000/50001/50002/50003 (addBlocks on a complete order -> 50003 "order is complete").
+# An open order whose blocks are all done reports state WAITING (not FINISHED). Order states: CREATED WAITING RUNNING
+# SUSPENDED FINISHED FAILED STOPPED Error TOBEDISPATCHED; block states add POSTING and MANUAL_FINISHED.
+# NOTE: by default addBlocks on an unknown order id CREATES it (param CreateNewOrderWhileAddBlocks), so callers must
+# check the order still exists before appending.
 import json, time, urllib.request, urllib.error
 from .base import DispatcherAdapter
 from . import rds_scene
@@ -58,7 +63,7 @@ class RdsAdapter(DispatcherAdapter):
 
     def submit(self, payload):
         st, js, txt = self.request("POST", "/setOrder", payload)
-        ok = st == 200 and isinstance(js, dict) and js.get("code") == 0
+        ok = st == 200 and isinstance(js, dict) and js.get("code", 0) in (0, None)  # doc: code 0 or absent = success
         return ok, None if ok else txt[:200]
 
     def order_status(self, order_id, quiet=True, timeout=8):
@@ -81,7 +86,7 @@ class RdsAdapter(DispatcherAdapter):
     def payload_blocks(self, payload): return list(payload.get("blocks") or [])
     def block_id(self, block): return block.get("blockId")
     def _ok(self, st, js, txt):
-        ok = st == 200 and isinstance(js, dict) and js.get("code") == 0
+        ok = st == 200 and isinstance(js, dict) and js.get("code", 0) in (0, None)  # doc: code 0 or absent = success
         return ok, None if ok else ("HTTP %s %s" % (st, txt[:200]))
     def add_blocks(self, order_id, blocks, complete=False):
         return self._ok(*self.request("POST", "/addBlocks", {"id": order_id, "blocks": blocks, "complete": bool(complete)}))

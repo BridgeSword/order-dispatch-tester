@@ -83,6 +83,22 @@ class IncTest(unittest.TestCase):
         ids = [b["blockId"] for b in fake_rds.ORDERS["dl-rs"]["blocks"]]
         self.assertEqual(len(ids), len(set(ids))); self.assertEqual(len(ids), len(self.t["steps"]))
 
+    def test_error_block_stops_manual_finished_continues(self):
+        self.draft("dl-berr1"); self.draft("dl-bmanual1", "AP3", "AP4")
+        C.S["running"] = True; C.send_batch(["dl-berr1", "dl-bmanual1"], 0, 0, None, inc=True)
+        e, m = C.S["orders"]["dl-berr1"], C.S["orders"]["dl-bmanual1"]
+        self.assertTrue(self.run_until(lambda: e["inc"]["status"] == "stopped" and m["inc"]["status"] == "done"))
+        self.assertIn("Error", e["inc"]["reason"]); self.assertEqual(e["inc"]["sent"], 2)
+        self.assertEqual(m["inc"]["sent"], len(self.t["steps"]))
+
+    def test_rds_doc_response_codes(self):
+        rec = self.draft("dl-x-nocode")
+        self.assertEqual(C.AD().submit(C.AD().incremental_payload(rec["body"], 1)), (True, None))  # code absent = success
+        self.assertTrue(C.AD().mark_complete("dl-x-nocode")[0])
+        ok, err = C.AD().add_blocks("dl-x-nocode", [rec["body"]["blocks"][1]])  # complete order -> 50003
+        self.assertFalse(ok); self.assertIn("50003", err)
+        ok, err = C.AD().add_blocks("dl-nope", [rec["body"]["blocks"][1]]); self.assertFalse(ok)
+
     def test_off_mode_unchanged(self):
         rec = self.draft("dl-off"); C.S["running"] = True; C.send_batch(["dl-off"], 0, 0, None)
         sent = fake_rds.RECEIVED[0]

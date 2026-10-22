@@ -171,4 +171,9 @@
 - 未封口的运单在 RDS 里所有块完成后状态是 `WAITING`（不是 FINISHED），封口后才 FINISHED。
 - 工具重启：追加进度保存在 `sent_orders.json`，启动后自动恢复跟踪（日志 `inc_resume`，标签悬停显示「工具重启后已恢复跟踪」）。恢复时以 orderDetails 返回的块列表为准，已在 RDS 中的块不会重复追加。
 - 日志事件：`inc_start`、`inc_add`、`inc_resync`、`inc_error`、`inc_done`、`inc_stopped`。
-- 说明：`/addBlocks`、`/markComplete` 的路径与字段按 RDS Core 的「追加运单块 / 封口」接口实现，仓库内没有对应的 RDS 接口文档；如现场 RDS 版本字段不同，请以 `logs/rds_*.jsonl` 中的 http 记录核对。
+- 已对照官方 RDSCore HTTP API 文档（飞书知识库「HTTP API」→ 运单 / 动作块）核对：
+  - `setOrder` 的 `complete`（bool，false=不封口，之后可 addBlocks）；`addBlocks` body `{id, blocks, complete?}`（`complete` 需 ≥0.1.8.22090102，本工具不用它封口）；`markComplete` body `{id}`（也支持 `{idList}`，本工具不用）。
+  - 成功判定：HTTP 200 且 `code` 为 0 **或缺省**；错误码 40000/50000/50001/50002/50003（对已封口运单 addBlocks 返回 50003 "order is complete"）。
+  - 运单状态：CREATED / WAITING / RUNNING / SUSPENDED / FINISHED / FAILED / STOPPED / Error / TOBEDISPATCHED；动作块状态另有 POSTING、MANUAL_FINISHED。
+  - 逐块追加：前一块 `FINISHED` 或 `MANUAL_FINISHED`（手动完成）才追加下一块；块或运单为 `FAILED` / `STOPPED` / `Error` 时停止追加。SUSPENDED、POSTING、块级 WAITING 只等待，不停止。
+  - 注意：RDS 默认允许 addBlocks 对不存在的运单 ID **自动创建运单**（参数 CreateNewOrderWhileAddBlocks），所以工具每次追加前都先用 orderDetails 确认运单仍存在；查无此单就停止，不再追加。

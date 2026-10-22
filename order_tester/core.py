@@ -617,7 +617,9 @@ def swap_drafts(ids, cfg, t):
     return {"n": len(done), "done": done, "errors": errs}
 
 # ---------------------------------------------------------------- block-by-block ("逐块下发") dispatch
-INC_STOP = frozenset({"FAILED", "STOPPED", "CANCELED", "CANCELLED", "TERMINATED", "WITHDRAWN", "MANUAL_FINISHED", "SKIPPED"})
+# RDS doc: order FAILED/STOPPED/Error; block FAILED/STOPPED/Error. Block MANUAL_FINISHED (手动完成动作块) counts as done.
+INC_STOP = frozenset({"FAILED", "STOPPED", "Error", "ERROR", "CANCELED", "CANCELLED", "TERMINATED", "WITHDRAWN", "SKIPPED"})
+INC_BLOCK_DONE = frozenset({"FINISHED", "MANUAL_FINISHED"})
 INC_ERR_LIMIT = 5  # consecutive addBlocks/markComplete errors before an order is given up
 
 def inc_enabled(cfg=None):
@@ -661,10 +663,10 @@ def inc_once():
             if have > inc["sent"]: inc["sent"] = have; log("inc_resync", id=oid, sent=have)  # appended before a restart
             bad = [(b, states[b]) for b in ours[:inc["sent"]] if states.get(b) in INC_STOP]
             if bad: _inc_stop(o, "block %s %s" % bad[0]); changed = True; continue
-            if js.get("state") in INC_STOP or js.get("state") in TERMINAL():
+            if js.get("state") in INC_STOP or (js.get("state") in TERMINAL() and js.get("state") != "MANUAL_FINISHED"):
                 _inc_stop(o, "order %s" % js.get("state")); changed = True; continue
             last = ours[inc["sent"] - 1]
-            if inc["sent"] < inc["total"] and states.get(last) != "FINISHED": continue
+            if inc["sent"] < inc["total"] and states.get(last) not in INC_BLOCK_DONE: continue
             nxt = blocks[inc["sent"]] if inc["sent"] < inc["total"] else None
         if nxt is not None:
             ok, err = ad.add_blocks(oid, [nxt], complete=False); act = "addBlocks"
