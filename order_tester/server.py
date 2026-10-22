@@ -64,7 +64,7 @@ class H(BaseHTTPRequestHandler):
         if path == "/api/state":
             now = time.time()
             with lock:
-                return self.send({"now": now, "base": C.AD().base, "adapter": C.AD().name, "running": S["running"], "sent": S["sent"], "msg": S["msg"], "log": C.P["log"],
+                return self.send({"now": now, "base": C.AD().base, "adapter": C.AD().name, "running": S["running"], "sent": S["sent"], "msg": S["msg"], "log": C.P["log"], "incPending": len(C.inc_pending()),
                     "orders": [dict({k: v for k, v in o.items() if k != "body"}, age=now - o["sent"], idle=now - o["changed"]) for o in S["orders"].values()],
                     "robots": [dict(r, idle=now - r["moved"]) for r in S["robots"].values()], "groups": S["groups"]})
         if path == "/api/get":  # read-only proxy for debugging
@@ -127,7 +127,7 @@ class H(BaseHTTPRequestHandler):
             b, t, pools, warn, err = C.prepare_cfg(b)
             if err: return self.send({"ok": False, "err": err})
             if b.get("count") in (None, ""): b["count"] = T.make_picker(b.get("strategy"), [(r, pools[r]) for r in T.pool_roles(t)], b.get("noSelf", True)).default_count()
-            S["cfg"] = b; S["sent"] = 0; S["running"] = True; S["msg"] = "auto" + (" | " + warn if warn else "")
+            b.setdefault("incPollSec", S["cfg"].get("incPollSec", 1)); b.setdefault("blockByBlock", S["cfg"].get("blockByBlock", False)); S["cfg"] = b; S["sent"] = 0; S["running"] = True; S["msg"] = "auto" + (" | " + warn if warn else "")
             S["dbatch"] = C.new_batch([], b.get("interval"), b.get("maxActive"), "auto", b.get("group") or ""); S["dbatch"]["n"] = int(b.get("count") or 0)
             C.log("start", cfg=b); threading.Thread(target=C.dispatcher, args=(t, pools), daemon=True).start(); return self.send({"ok": True, "warn": warn})
         if path == "/api/stop":
@@ -152,11 +152,14 @@ class H(BaseHTTPRequestHandler):
             with lock: ids = [i for i in b.get("ids", []) if i in S["orders"] and S["orders"][i]["state"] == DRAFT]
             if not ids: return self.send({"ok": False, "err": C.msg("srv.noDraftSel")})
             C.set_base(b.get("base"))
+            if "blockByBlock" in b: S["cfg"]["blockByBlock"] = bool(b.get("blockByBlock"))
+            if b.get("incPollSec"): S["cfg"]["incPollSec"] = float(b["incPollSec"])
+            inc = C.inc_enabled()
             S["running"] = True; S["sent"] = 0; S["msg"] = "0/%d" % len(ids); S["batch"] = set(ids)
             with lock: grp = ",".join(sorted({(S["orders"][i].get("body") or {}).get("group", "") for i in ids} - {""}))
             meta = C.new_batch(ids, float(b.get("interval") or 0), int(b.get("maxActive") or 0), "send", grp)
-            C.log("send_batch", ids=ids, interval=b.get("interval"), maxActive=b.get("maxActive"), base=C.AD().base, batch=meta)
-            threading.Thread(target=C.send_batch, args=(ids, float(b.get("interval") or 0), int(b.get("maxActive") or 0), meta), daemon=True).start()
+            C.log("send_batch", ids=ids, interval=b.get("interval"), maxActive=b.get("maxActive"), base=C.AD().base, batch=meta, blockByBlock=inc)
+            threading.Thread(target=C.send_batch, args=(ids, float(b.get("interval") or 0), int(b.get("maxActive") or 0), meta, inc), daemon=True).start()
             return self.send({"ok": True, "n": len(ids)})
         if path == "/api/swap_drafts":
             if b.get("settings"): C.save_settings(b["settings"])
@@ -193,8 +196,18 @@ def main(argv=None):
     if adapter != C.AD().name: C.S["adapter"] = C.get_adapter(adapter, C.AD().base, C.log)
     C.set_base(st0.get("base")); C.set_base(a.base)
     if st0.get("pollSec"): S["cfg"]["pollSec"] = st0["pollSec"]
+    f0 = st0.get("fields") if isinstance(st0.get("fields"), dict) else {}
+    S["cfg"]["blockByBlock"] = bool(f0.get("bbb"))
+    try: S["cfg"]["incPollSec"] = float(f0.get("bbb_poll") or 1)
+    except (TypeError, ValueError): S["cfg"]["incPollSec"] = 1.0
     nd = C.load_drafts(); ns = C.load_sent()
+    pend = C.inc_pending()
+    if pend:  # open block-by-block orders from before the restart: resumed (already-appended blocks are detected via orderDetails)
+        C.log("inc_resume", ids=pend); print("block-by-block orders resumed after restart: %d (%s)" % (len(pend), ", ".join(pend[:10])), flush=True)
+        with C.lock:
+            for i in pend: S["orders"][i]["inc"]["resumed"] = time.time()
     threading.Thread(target=C.poller, daemon=True).start()
+    threading.Thread(target=C.inc_worker, daemon=True).start()
     print("drafts restored: %d, sent restored: %d" % (nd, ns), flush=True)
     print("Order dispatch tester: http://%s:%d  dispatcher(%s): %s  data: %s  log: %s" % (a.host, a.port, C.AD().name, C.AD().base, C.P["data"], C.P["log"]), flush=True)
     try: srv = ThreadingHTTPServer((a.host, a.port), H)

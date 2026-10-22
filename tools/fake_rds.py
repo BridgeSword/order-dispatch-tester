@@ -1,7 +1,11 @@
 # -*- coding: utf-8 -*-
 """Tiny fake RDS for local end-to-end testing (no real data). python tools/fake_rds.py [--port 18088]
 Scene: AP1..AP12 with LM1..LM12 pre-points (curve LMn -> APn), robot group grpA (AMB-01, AMB-02).
-Orders progress CREATED -> RUNNING -> FINISHED (order ids containing 'fail' go FAILED, then RUNNING again)."""
+Orders progress CREATED -> RUNNING -> FINISHED (order ids containing 'fail' go FAILED, then RUNNING again).
+Incremental orders (setOrder complete=false, then /addBlocks + /markComplete): blocks run one after another,
+BLOCK_DUR s each (a block starts when it exists and its predecessor is FINISHED). All blocks done but not complete
+-> order WAITING; complete -> FINISHED. Order ids containing 'bfail' fail their 2nd block (block + order FAILED).
+INC_EVENTS records every addBlocks/markComplete with the predecessor block state at that moment."""
 import argparse, io, json, threading, time, zipfile
 from http.server import ThreadingHTTPServer, BaseHTTPRequestHandler
 
@@ -21,6 +25,29 @@ def scene():
                       "robotGroup": [{"name": "grpA", "robot": [{"id": "AMB-01"}, {"id": "AMB-02"}]}]}}
 
 ORDERS = {}; LOCK = threading.Lock(); RECEIVED = []
+BLOCK_DUR = 0.4; INC_EVENTS = []
+
+def inc_blocks(o, now=None):
+    """[(block, state)] for an incremental order (a terminated order freezes at its terminate time, RUNNING -> STOPPED)"""
+    term = o.get("termT"); now = term or now or time.time(); cur = o["t"]; out = []; dead = False
+    for i, b in enumerate(o["blocks"]):
+        if dead: out.append((b, "CREATED")); continue
+        start = max(cur, b["_added"]); fin = start + BLOCK_DUR
+        if now < start: st = "CREATED"
+        elif i == 1 and "bfail" in o["id"] and now >= start + BLOCK_DUR / 2: st = "FAILED"
+        elif now >= fin: st = "FINISHED"
+        else: st = "STOPPED" if term else "RUNNING"
+        out.append((b, st)); cur = fin
+        if st != "FINISHED": dead = True
+    return out
+
+def inc_state(o):
+    bs = [s for _, s in inc_blocks(o)]
+    if o.get("terminated"): return "STOPPED"
+    if "FAILED" in bs: return "FAILED"
+    if bs and all(s == "FINISHED" for s in bs): return "FINISHED" if o.get("complete") else "WAITING"
+    if any(s in ("RUNNING", "FINISHED") for s in bs): return "RUNNING"
+    return "CREATED"
 
 def state_of(o):
     age = time.time() - o["t"]
@@ -60,15 +87,20 @@ class H(BaseHTTPRequestHandler):
             oid = p.split("/", 2)[2]
             with LOCK: o = ORDERS.get(oid)
             if not o: return self.js({"code": 60000, "msg": "not found"})
+            if o.get("inc"):
+                with LOCK: bl = inc_blocks(o); st = inc_state(o)
+                return self.js({"id": oid, "state": st, "complete": bool(o.get("complete")), "vehicle": "AMB-01" if st != "CREATED" else "", "createTime": int(o["t"] * 1000),
+                                "blocks": [{"blockId": b["blockId"], "state": s} for b, s in bl],
+                                "terminateTime": int(time.time() * 1000) if st in ("FINISHED", "STOPPED") else None})
             st = state_of(o)
             return self.js({"id": oid, "state": st, "vehicle": "AMB-01" if st != "CREATED" else "", "createTime": int(o["t"] * 1000),
                             "blocks": [{"blockId": b["blockId"], "state": "FINISHED" if st == "FINISHED" else ("RUNNING" if st == "RUNNING" else "CREATED")} for b in o["body"]["blocks"]],
                             "terminateTime": int(time.time() * 1000) if st in ("FINISHED", "STOPPED") else None})
         if p == "/robotsStatus":
-            with LOCK: act = [o for o in ORDERS.values() if state_of(o) in ("RUNNING", "FAILED")]
+            with LOCK: act = [o for o in ORDERS.values() if (inc_state(o) if o.get("inc") else state_of(o)) in ("RUNNING", "FAILED")]
             cur = act[0] if act else None; x = 1.0 + (time.time() % 10) * 0.5 if cur else 1.0
             return self.js({"report": [{"uuid": "AMB-01", "dispatchable": True, "connection_status": 1, "rbk_report": {"x": x, "y": 0.5, "angle": 0.0, "battery_level": 0.8, "current_station": "AP1", "blocked": False},
-                                        "current_order": {"id": cur["id"], "state": state_of(cur)} if cur else {}},
+                                        "current_order": {"id": cur["id"], "state": inc_state(cur) if cur.get("inc") else state_of(cur)} if cur else {}},
                                        {"uuid": "AMB-02", "dispatchable": True, "connection_status": 1, "rbk_report": {"x": 5.0, "y": 0.5, "angle": 0.0, "battery_level": 0.6, "current_station": "AP3", "blocked": False}}]})
         if p == "/_received":
             with LOCK: return self.js(RECEIVED)
@@ -76,11 +108,26 @@ class H(BaseHTTPRequestHandler):
     def do_POST(self):
         n = int(self.headers.get("Content-Length") or 0); b = json.loads(self.rfile.read(n) or b"{}")
         if self.path == "/setOrder":
-            with LOCK: ORDERS[b["id"]] = {"id": b["id"], "t": time.time(), "body": b}; RECEIVED.append(b)
+            with LOCK:
+                now = time.time(); ORDERS[b["id"]] = o = {"id": b["id"], "t": now, "body": b}; RECEIVED.append(b)
+                if b.get("complete") is False:
+                    o.update(inc=True, complete=False, blocks=[dict(x, _added=now) for x in b.get("blocks") or []])
+            return self.js({"code": 0})
+        if self.path in ("/addBlocks", "/markComplete"):
+            with LOCK:
+                o = ORDERS.get(b.get("id"))
+                if not o or not o.get("inc"): return self.js({"code": 60000, "msg": "order not found or not incremental"})
+                if o.get("complete"): return self.js({"code": 60001, "msg": "order already complete"})
+                bl = inc_blocks(o); prev = bl[-1][1] if bl else None
+                INC_EVENTS.append({"id": o["id"], "path": self.path, "t": time.time(), "prevState": prev, "blocks": [x.get("blockId") for x in b.get("blocks") or []], "n": len(o["blocks"])})
+                if self.path == "/addBlocks":
+                    now = time.time(); o["blocks"] += [dict(x, _added=now) for x in b.get("blocks") or []]
+                    if b.get("complete"): o["complete"] = True
+                else: o["complete"] = True
             return self.js({"code": 0})
         if self.path == "/terminate":
             with LOCK:
-                if b.get("id") in ORDERS: ORDERS[b["id"]]["terminated"] = True
+                if b.get("id") in ORDERS: ORDERS[b["id"]]["terminated"] = True; ORDERS[b["id"]].setdefault("termT", time.time())
             return self.js({"code": 0})
         self.js({"err": "nf"}, 404)
 

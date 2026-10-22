@@ -1,6 +1,12 @@
 # -*- coding: utf-8 -*-
 """SEER RDS adapter: neutral order -> RDS setOrder JSON, plus the RDS HTTP endpoints
-(/scene, /downloadScene, /setOrder, /orderDetails/<id>, /robotsStatus, /terminate)."""
+(/scene, /downloadScene, /setOrder, /orderDetails/<id>, /robotsStatus, /terminate,
+and for block-by-block dispatch /addBlocks + /markComplete)."""
+# Incremental orders (RDS core "追加运单块 / 封口"):
+#   POST /setOrder     {..., "complete": false, "blocks": [first]}
+#   POST /addBlocks    {"id": <order id>, "blocks": [next], "complete": false}
+#   POST /markComplete {"id": <order id>}
+# success = HTTP 200 and {"code": 0}. An open order whose blocks are all done reports state WAITING (not FINISHED).
 import json, time, urllib.request, urllib.error
 from .base import DispatcherAdapter
 from . import rds_scene
@@ -63,10 +69,24 @@ class RdsAdapter(DispatcherAdapter):
         if not (isinstance(js, dict) and (js.get("id") or "state" in js)): return None
         bl = [b for b in (js.get("blocks") or []) if isinstance(b, dict)]
         return {"state": js.get("state"), "vehicle": js.get("vehicle") or "",
-                "blockStates": [b.get("state") for b in bl],
+                "blockStates": [b.get("state") for b in bl], "blockIds": [b.get("blockId") for b in bl],
+                "complete": js.get("complete"),
                 "blockStartTimes": [t for t in (ts(b.get("startTime")) for b in bl) if t],
                 "createTime": ts(js.get("createTime")), "receiveTime": ts(js.get("receiveTime")),
                 "terminateTime": ts(js.get("terminateTime")) or ts(js.get("terminalTime")), "finishTime": ts(js.get("finishTime"))}
+
+    supports_incremental = True
+    def incremental_payload(self, payload, n):
+        return dict(payload, complete=False, blocks=list(payload["blocks"][:n]))
+    def payload_blocks(self, payload): return list(payload.get("blocks") or [])
+    def block_id(self, block): return block.get("blockId")
+    def _ok(self, st, js, txt):
+        ok = st == 200 and isinstance(js, dict) and js.get("code") == 0
+        return ok, None if ok else ("HTTP %s %s" % (st, txt[:200]))
+    def add_blocks(self, order_id, blocks, complete=False):
+        return self._ok(*self.request("POST", "/addBlocks", {"id": order_id, "blocks": blocks, "complete": bool(complete)}))
+    def mark_complete(self, order_id):
+        return self._ok(*self.request("POST", "/markComplete", {"id": order_id}))
 
     def cancel(self, order_id):
         st, js, txt = self.request("POST", "/terminate", {"id": order_id})

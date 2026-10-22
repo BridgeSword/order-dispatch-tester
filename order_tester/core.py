@@ -463,7 +463,7 @@ _sent_sig = [None]
 def save_sent():
     try:
         with lock: d = [o for o in S["orders"].values() if o["state"] != DRAFT]
-        sig = json.dumps([(o["id"], o["state"], o.get("sig"), o.get("changed"), o.get("vehicle"), o.get("error"), o.get("started"), o.get("ended"), o.get("assigned"), o.get("batch")) for o in d], ensure_ascii=False)
+        sig = json.dumps([(o["id"], o["state"], o.get("sig"), o.get("changed"), o.get("vehicle"), o.get("error"), o.get("started"), o.get("ended"), o.get("assigned"), o.get("batch"), o.get("inc")) for o in d], ensure_ascii=False)
         if sig == _sent_sig[0]: return
         tmp = P["sent"] + ".tmp"
         with open(tmp, "w", encoding="utf-8") as f: json.dump(d, f, ensure_ascii=False)
@@ -616,7 +616,91 @@ def swap_drafts(ids, cfg, t):
     save_drafts(); log("swap_drafts", done=done, errors=errs)
     return {"n": len(done), "done": done, "errors": errs}
 
-def send_batch(ids, interval, max_active, meta=None):
+# ---------------------------------------------------------------- block-by-block ("逐块下发") dispatch
+INC_STOP = frozenset({"FAILED", "STOPPED", "CANCELED", "CANCELLED", "TERMINATED", "WITHDRAWN", "MANUAL_FINISHED", "SKIPPED"})
+INC_ERR_LIMIT = 5  # consecutive addBlocks/markComplete errors before an order is given up
+
+def inc_enabled(cfg=None):
+    return bool((cfg if cfg is not None else S["cfg"]).get("blockByBlock")) and getattr(AD(), "supports_incremental", False)
+
+def submit_record(rec, inc=False):
+    """send a draft record. inc: open order with only the first block, the rest is appended by inc_once()."""
+    body = rec["body"]; ad = AD()
+    blocks = ad.payload_blocks(body) if inc else []
+    if inc and len(blocks) > 1:
+        ok, err = ad.submit(ad.incremental_payload(body, 1))
+        rec["inc"] = {"total": len(blocks), "sent": 1, "status": "appending" if ok else "stopped", "reason": "" if ok else "setOrder: " + str(err),
+                      "errs": 0, "t": time.time(), "steps": [{"t": time.time(), "act": "setOrder", "block": ad.block_id(blocks[0]), "ok": ok}]}
+        log("inc_start", id=rec["id"], total=len(blocks), ok=ok, err=err)
+        return ok, err
+    return ad.submit(body)
+
+def _inc_stop(o, reason, status="stopped"):
+    o["inc"].update(status=status, reason=reason, tEnd=time.time()); o["changed"] = time.time()
+    log("inc_" + status, id=o["id"], reason=reason, sent=o["inc"]["sent"], total=o["inc"]["total"])
+
+def inc_pending():
+    with lock: return [k for k, o in S["orders"].items() if isinstance(o.get("inc"), dict) and o["inc"].get("status") == "appending"]
+
+def inc_once():
+    """one pass over open block-by-block orders: append the next block once the previous one is FINISHED.
+    Idempotent: blocks already present in the dispatcher (e.g. appended before a restart) are not sent again."""
+    ad = AD(); changed = False
+    for oid in inc_pending():
+        with lock:
+            o = S["orders"].get(oid)
+            if not o or not o.get("body"): continue
+            inc = o["inc"]; blocks = ad.payload_blocks(o["body"])
+        js = ad.order_status(oid)
+        if js is None: continue  # dispatcher unreachable: retry next tick
+        with lock:
+            if js.get("missing"): _inc_stop(o, "order missing in dispatcher: " + str(js.get("msg", ""))); changed = True; continue
+            ids = js.get("blockIds") or []; states = dict(zip(ids, js.get("blockStates") or []))
+            ours = [ad.block_id(b) for b in blocks]
+            have = sum(1 for b in ours if b in states)
+            if have > inc["sent"]: inc["sent"] = have; log("inc_resync", id=oid, sent=have)  # appended before a restart
+            bad = [(b, states[b]) for b in ours[:inc["sent"]] if states.get(b) in INC_STOP]
+            if bad: _inc_stop(o, "block %s %s" % bad[0]); changed = True; continue
+            if js.get("state") in INC_STOP or js.get("state") in TERMINAL():
+                _inc_stop(o, "order %s" % js.get("state")); changed = True; continue
+            last = ours[inc["sent"] - 1]
+            if inc["sent"] < inc["total"] and states.get(last) != "FINISHED": continue
+            nxt = blocks[inc["sent"]] if inc["sent"] < inc["total"] else None
+        if nxt is not None:
+            ok, err = ad.add_blocks(oid, [nxt], complete=False); act = "addBlocks"
+        else:
+            ok, err = ad.mark_complete(oid); act = "markComplete"
+        with lock:
+            inc["steps"].append({"t": time.time(), "act": act, "block": ad.block_id(nxt) if nxt else "", "ok": ok}); inc["steps"] = inc["steps"][-50:]
+            o["changed"] = time.time(); changed = True
+            if not ok:
+                inc["errs"] = inc.get("errs", 0) + 1; inc["lastErr"] = "%s: %s" % (act, err)
+                log("inc_error", id=oid, act=act, err=err, n=inc["errs"])
+                if inc["errs"] >= INC_ERR_LIMIT: _inc_stop(o, "%s failed %d times: %s" % (act, inc["errs"], err))
+                continue
+            inc["errs"] = 0; inc.pop("lastErr", None)
+            if nxt is not None:
+                inc["sent"] += 1; log("inc_add", id=oid, block=ad.block_id(nxt), sent=inc["sent"], total=inc["total"])
+        if nxt is not None and inc["sent"] == inc["total"]:  # last block appended -> close the order right away
+            ok, err = ad.mark_complete(oid)
+            with lock:
+                inc["steps"].append({"t": time.time(), "act": "markComplete", "block": "", "ok": ok})
+                if not ok: inc["errs"] = 1; inc["lastErr"] = "markComplete: %s" % err; log("inc_error", id=oid, act="markComplete", err=err, n=1); continue
+            nxt = None
+        if nxt is None:
+            with lock: _inc_stop(o, "", status="done")
+    if changed: save_sent()
+    return changed
+
+def inc_worker():
+    while True:
+        try: inc_once()
+        except Exception as e: log("inc_error", err=str(e))
+        try: d = float(S["cfg"].get("incPollSec") or 1)
+        except (TypeError, ValueError): d = 1.0
+        time.sleep(max(0.2, d))
+
+def send_batch(ids, interval, max_active, meta=None, inc=False):
     done = 0
     try:
         for oid in ids:
@@ -625,8 +709,7 @@ def send_batch(ids, interval, max_active, meta=None):
             with lock:
                 o = S["orders"].get(oid)
                 if not o or o["state"] != DRAFT: continue
-                body = o["body"]
-            ok, err = AD().submit(body)
+            ok, err = submit_record(o, inc)
             now = time.time()
             with lock:
                 o.update(state="SENT" if ok else "SEND_FAIL", sent=now, changed=now, error=err)
@@ -655,7 +738,7 @@ def dispatcher(t, pools):
                 S["orders"][sid] = {"id": sid, "pair": [picks[r] for r in roles], "picks": picks, "vehicle": "", "state": "SKIPPED", "sent": now, "changed": now, "sig": "", "error": str(e), "body": None}
                 S["sent"] += 1
             continue
-        ok, err = AD().submit(rec["body"]); now = time.time()
+        ok, err = submit_record(rec, inc_enabled(cfg)); now = time.time()
         rec.update(state="SENT" if ok else "SEND_FAIL", sent=now, changed=now, error=err, batch=(S.get("dbatch") or {}).get("id"), batchMeta=S.get("dbatch"))
         with lock: S["orders"][rec["id"]] = rec; S["sent"] += 1
         t_end = time.time() + float(cfg.get("interval") or 0)

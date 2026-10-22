@@ -46,6 +46,22 @@ class DispatcherAdapter(object):
         """terminate/cancel one order; returns the dispatcher's response (JSON or text)"""
         raise NotImplementedError
 
+    # ---- incremental ("block-by-block") orders, optional
+    supports_incremental = False
+    def incremental_payload(self, payload, n):
+        """payload of an open (not complete) order carrying only the first n blocks"""
+        raise NotImplementedError
+    def payload_blocks(self, payload):
+        """list of block objects of a full payload (same order as executed)"""
+        raise NotImplementedError
+    def block_id(self, block): raise NotImplementedError
+    def add_blocks(self, order_id, blocks, complete=False):
+        """append blocks to an open order. returns (ok, error_text|None)"""
+        raise NotImplementedError
+    def mark_complete(self, order_id):
+        """close an open order (no more blocks). returns (ok, error_text|None)"""
+        raise NotImplementedError
+
     # ---- fleet
     def robots(self):
         """list of normalised robots, or None if unavailable"""

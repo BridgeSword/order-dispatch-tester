@@ -319,5 +319,14 @@
  "st.emptySel": "No station is in any pool yet. Add stations by clicking them on the Map tab, via \"Paste stations manually\", or with the controls next to each pool.",
  "st.selOnly": "Read-only: only stations already in a pool are listed",
  "ord.gone": "gone from RDS",
- "ord.goneTip": "RDS answered 'order not found' 3 times in a row (cancelled/withdrawn in RDS); treated as cancelled: duration frozen, no longer counted as stuck. RDS said:"
+ "ord.goneTip": "RDS answered 'order not found' 3 times in a row (cancelled/withdrawn in RDS); treated as cancelled: duration frozen, no longer counted as stuck. RDS said:",
+ "disp.bbb": "Block-by-block",
+ "disp.bbbPoll": "Block poll (s)",
+ "disp.bbbTip": "When on: orders are sent with only the first block (complete=false); the next block is appended via /addBlocks once the previous one is FINISHED, then /markComplete after the last. Stops on FAILED/STOPPED/cancel. Applies to subsequent sends",
+ "inc.tag": "blocks",
+ "inc.appending": "appending blocks",
+ "inc.done": "all blocks appended, marked complete",
+ "inc.stopped": "appending stopped",
+ "inc.resumed": "resumed after tool restart",
+ "inc.pending": "{n} block-by-block orders open"
 }
