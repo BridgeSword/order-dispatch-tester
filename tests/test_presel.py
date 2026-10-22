@@ -97,30 +97,30 @@ class PreSelectTest(unittest.TestCase):
         rec = C.make_draft({"start": "AP1"}, t, cfg)
         self.assertEqual(rec["body"]["blocks"][0]["location"], "LM2"); self.assertEqual(rec["preChosen"][0]["select"], "index=2")
 
-class AP140259Test(unittest.TestCase):
-    """Regression from the RIL site (/scene, read-only): AP140259 is linked both ways to LM142652 (0.462 m) and
-    LM140258 (1.665 m) - the two LMs are collinear but not connected - plus an AP-AP link to AP200."""
+class TwoDirectLmsTest(unittest.TestCase):
+    """Regression (scene data): AP100 is linked both ways to LM101 (0.462 m) and
+    LM102 (1.665 m) - the two LMs are collinear but not connected - plus an AP-AP link to AP200."""
     def scene(self):
-        pts = [P("ActionPoint", "AP140259", 27.649, 18.789), P("ActionPoint", "AP200", 28.108, 18.795),
-               P("LocationMark", "LM140258", 25.984, 18.789), P("LocationMark", "LM142652", 27.187, 18.789),
-               P("LocationMark", "LM140253", 24.0, 18.789), P("LocationMark", "LM140263", 25.984, 20.0)]
-        cv = [CV("AP140259", "LM140258"), CV("LM140258", "AP140259"), CV("AP140259", "LM142652"), CV("LM142652", "AP140259"),
-              CV("AP200", "AP140259"), CV("AP200", "LM142078"), CV("LM140253", "LM140258"), CV("LM140258", "LM140263")]
+        pts = [P("ActionPoint", "AP100", 27.649, 18.789), P("ActionPoint", "AP200", 28.108, 18.795),
+               P("LocationMark", "LM102", 25.984, 18.789), P("LocationMark", "LM101", 27.187, 18.789),
+               P("LocationMark", "LM103", 24.0, 18.789), P("LocationMark", "LM104", 25.984, 20.0)]
+        cv = [CV("AP100", "LM102"), CV("LM102", "AP100"), CV("AP100", "LM101"), CV("LM101", "AP100"),
+              CV("AP200", "AP100"), CV("AP200", "LM105"), CV("LM103", "LM102"), CV("LM102", "LM104")]
         return {"scene": {"areas": [{"logicalMap": {"advancedPoints": pts, "advancedCurves": cv}}]}}
     def test_both_direct_lms_are_candidates(self):
         fresh_core(self); st = {p["name"]: p for p in rds_scene.parse_scene(self.scene())}
-        p = st["AP140259"]
-        self.assertEqual(p["pre"], "LM142652")  # default unchanged: nearest drive-in LM
+        p = st["AP100"]
+        self.assertEqual(p["pre"], "LM101")  # default unchanged: nearest drive-in LM
         self.assertEqual([(c["name"], c["dir"], c["dist"], c["src"]) for c in p["preInfo"]],
-                         [("LM142652", "in", 0.462, "curve-in"), ("LM140258", "in", 1.665, "curve-in")])
+                         [("LM101", "in", 0.462, "curve-in"), ("LM102", "in", 1.665, "curve-in")])
         C.S["prepoints"] = {k: v["pre"] for k, v in st.items() if v.get("pre")}; C.S["precands"] = C._precands(list(st.values()))
         t = {"name": "r", "steps": [{"id": "w", "name": "W", "location": {"type": "pre", "step": "s", "select": "index", "selArg": "2"}, "operation": "Wait", "args": {}},
                                     {"id": "s", "name": "S", "location": {"type": "pool", "pool": "start"}, "operation": "JackLoad", "args": {}}]}
         self.assertEqual(T.validate(t), [])
-        o = T.build_order(t, {"start": "AP140259"}, {}, lambda n: C.pre_point(n, {}), "o", cands_of=lambda n: C.pre_cands(n, {}))
-        self.assertEqual(o["steps"][0]["location"], "LM140258")
+        o = T.build_order(t, {"start": "AP100"}, {}, lambda n: C.pre_point(n, {}), "o", cands_of=lambda n: C.pre_cands(n, {}))
+        self.assertEqual(o["steps"][0]["location"], "LM102")
         t["steps"][0]["location"].update(select="index", selArg="3")
-        with self.assertRaises(ValueError): T.build_order(t, {"start": "AP140259"}, {}, lambda n: C.pre_point(n, {}), "o", cands_of=lambda n: C.pre_cands(n, {}))
+        with self.assertRaises(ValueError): T.build_order(t, {"start": "AP100"}, {}, lambda n: C.pre_point(n, {}), "o", cands_of=lambda n: C.pre_cands(n, {}))
 
 class StationHeadingTest(unittest.TestCase):
     def test_dir_parsed_and_kept(self):

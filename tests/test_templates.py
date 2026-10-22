@@ -93,27 +93,27 @@ class AdapterInterfaceTest(unittest.TestCase):
 if __name__ == "__main__": unittest.main()
 
 class CustomPoolTemplateTest(unittest.TestCase):
-    """Template like Ross's RIL-L: two fixed-station steps + one step on a custom pool."""
+    """Template with two fixed-station steps + one step on a custom pool."""
     def test_fixed_plus_custom_pool(self):
         fresh_core(self); C.S["prepoints"] = dict(PREPOINTS)
-        t = {"name": "RIL-L", "steps": [
+        t = {"name": "custom-pool-demo", "steps": [
             {"id": "s", "location": {"type": "fixed", "station": "AP5"}, "operation": "JackLoad", "args": {}},
             {"id": "e", "location": {"type": "fixed", "station": "LM6"}, "operation": "JackUnload", "args": {}},
             {"id": "step1", "location": {"type": "pool", "pool": "STP"}, "operation": "Wait", "args": {}}]}
-        C.S["store"].put(t); t = C.S["store"].get("RIL-L")
+        C.S["store"].put(t); t = C.S["store"].get("custom-pool-demo")
         self.assertEqual(t["pools"], ["STP"])
-        b, tt, pools, warn, err = C.prepare_cfg({"templateName": "RIL-L", "pools": {"start": [], "end": [], "STP": ["AP7", "AP8"]}})
+        b, tt, pools, warn, err = C.prepare_cfg({"templateName": "custom-pool-demo", "pools": {"start": [], "end": [], "STP": ["AP7", "AP8"]}})
         self.assertEqual(err, ""); self.assertEqual(pools, {"STP": ["AP7", "AP8"]})
         res = C.generate_drafts(dict(b, count=None), tt, pools)
         self.assertEqual(res["n"], 2)  # default count = size of the template's first pool (STP)
         locs = sorted(C.S["orders"][i]["body"]["blocks"][2]["location"] for i in res["ids"])
         self.assertEqual(locs, ["AP7", "AP8"])
-        b2, _, _, _, err2 = C.prepare_cfg({"templateName": "RIL-L", "pools": {"start": ["AP1"]}})
+        b2, _, _, _, err2 = C.prepare_cfg({"templateName": "custom-pool-demo", "pools": {"start": ["AP1"]}})
         self.assertIn("STP", err2)  # empty template pool is reported even if start is filled
 
 
 def end_only_default():
-    """Ross's laptop default.json: pick (start) steps disabled, only the drop side enabled; stored pools still list start."""
+    """Default-template variant: pick (start) steps disabled, only the drop side enabled; stored pools still list start."""
     t = T.builtin_default(); t["pools"] = ["start", "end"]
     for s in t["steps"]:
         if s["id"] in ("pre", "s", "script"): s["enabled"] = False

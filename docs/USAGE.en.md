@@ -132,7 +132,7 @@ The built-in `default` template = the original five-block RDS deadlock test orde
 Stations in an old `scene_cache.json` have no `dir`. When the cache is restored at startup, if no station has an angle, a background task parses `dir`/`ignoreDir` from the local smap (the smapPath in the settings, or the map auto-downloaded under `maps\`), adds them to the cache and writes it back, without downloading the map again. It is logged as `dir_backfill`. If there is no local smap, just load the scene once more (the unit of the `dir` field from /scene is radians).
 
 ### Display of multiple pre-points
-When a station has several direct LM routes, all of those LMs are candidates (for example AP140259 → LM142652 / LM140258).
+When a station has several direct LM routes, all of those LMs are candidates (for example AP100 → LM101 / LM102).
 - The default pre-point (the first in the candidate list, i.e. the nearest "in" LM) is shown in bold in the pre-point info line; the other candidates follow it, joined with `/`, in gray.
 - On the map, the dashed line of the default candidate is darker and those of the other candidates are lighter.
 - When there is at least one LM candidate, non-LM neighbors (for example AP200 on an AP-AP link) are no longer counted as candidates, so that index and random never pick an AP.
@@ -173,7 +173,7 @@ The list shows only stations that have been added to some pool, and no longer li
 - An unsealed order's state in RDS after all blocks are finished is `WAITING` (not FINISHED); it becomes FINISHED only after it is sealed.
 - Tool restart: the appending progress is saved in `sent_orders.json`, and tracking resumes automatically after startup (log `inc_resume`; the tag's hover text shows "resumed after tool restart"). On resume, the block list returned by orderDetails is authoritative, and blocks already in RDS are not appended again.
 - Log events: `inc_start`, `inc_add`, `inc_resync`, `inc_error`, `inc_done`, `inc_stopped`.
-- Checked against the official RDSCore HTTP API documentation (Feishu wiki "HTTP API" → Orders / Action blocks):
+- Checked against the official RDSCore HTTP API documentation (sections "Orders" / "Action blocks"):
   - `setOrder`'s `complete` (bool, false = do not seal; `addBlocks` can follow); `addBlocks` body `{id, blocks, complete?}` (`complete` needs ≥0.1.8.22090102; this tool does not use it for sealing); `markComplete` body `{id}` (`{idList}` is also supported; this tool does not use it).
   - Success criterion: HTTP 200 and `code` equal to 0 **or absent**; error codes 40000/50000/50001/50002/50003 (addBlocks on a sealed order returns 50003 "order is complete").
   - Order states: CREATED / WAITING / RUNNING / SUSPENDED / FINISHED / FAILED / STOPPED / Error / TOBEDISPATCHED; action block states additionally include POSTING and MANUAL_FINISHED.

@@ -132,7 +132,7 @@
 旧版 `scene_cache.json` 的站点没有 `dir`。启动恢复缓存时，如果所有站点都没有角度，后台会从本地 smap（设置里的 smapPath 或 `maps\` 下自动下载的地图）解析 `dir`/`ignoreDir`，补进缓存后写回，不需要重新下载地图。日志里记作 `dir_backfill`。本地没有 smap 时，重新加载一次场景即可（/scene 的 `dir` 字段单位是弧度）。
 
 ### 多个前置点的显示
-一个站点有多条直连 LM 路线时，所有 LM 都是候选（例如 AP140259 → LM142652 / LM140258）。
+一个站点有多条直连 LM 路线时，所有 LM 都是候选（例如 AP100 → LM101 / LM102）。
 - 默认前置点（候选列表第一个，即最近的驶入 LM）在前置点信息行里加粗显示；其余候选用 `/` 接在后面，灰色。
 - 地图上，默认候选的虚线较深，其他候选的虚线较淡。
 - 至少有一个 LM 候选时，不再把非 LM 邻点（例如 AP-AP 连线上的 AP200）计入候选，避免 index、random 选到 AP。
@@ -173,7 +173,7 @@
 - 未封口的运单在 RDS 里所有块完成后状态是 `WAITING`（不是 FINISHED），封口后才 FINISHED。
 - 工具重启：追加进度保存在 `sent_orders.json`，启动后自动恢复跟踪（日志 `inc_resume`，标签悬停显示「工具重启后已恢复跟踪」）。恢复时以 orderDetails 返回的块列表为准，已在 RDS 中的块不会重复追加。
 - 日志事件：`inc_start`、`inc_add`、`inc_resync`、`inc_error`、`inc_done`、`inc_stopped`。
-- 已对照官方 RDSCore HTTP API 文档（飞书知识库「HTTP API」→ 运单 / 动作块）核对：
+- 已对照官方 RDSCore HTTP API 文档（「运单」/「动作块」章节）核对：
   - `setOrder` 的 `complete`（bool，false=不封口，之后可 addBlocks）；`addBlocks` body `{id, blocks, complete?}`（`complete` 需 ≥0.1.8.22090102，本工具不用它封口）；`markComplete` body `{id}`（也支持 `{idList}`，本工具不用）。
   - 成功判定：HTTP 200 且 `code` 为 0 **或缺省**；错误码 40000/50000/50001/50002/50003（对已封口运单 addBlocks 返回 50003 "order is complete"）。
   - 运单状态：CREATED / WAITING / RUNNING / SUSPENDED / FINISHED / FAILED / STOPPED / Error / TOBEDISPATCHED；动作块状态另有 POSTING、MANUAL_FINISHED。

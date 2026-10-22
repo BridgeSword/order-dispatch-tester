@@ -84,4 +84,8 @@ python -m unittest -v
 包含回归测试（用原版 `build_order` / `Picker` / `make_draft`（`tests/legacy_reference.py`）与新模板引擎在相同随机种子和输入下
 比较，要求 JSON 完全一致，含键顺序）、迁移测试、模板/策略测试，以及针对 `tools/fake_rds.py`（可手动运行的简易假 RDS）的端到端测试。
 
-界面文字在 `order_tester/i18n/{zh,en}.json`（由 `tools/i18n_src.py` 生成）。
+界面文字在 `order_tester/i18n/{zh,en}.json`，直接编辑这两个文件。`tools/i18n_src.py` 是遗留的生成脚本，已过时；不加 `--force` 拒绝运行，因为运行它会覆盖当前界面文字。
+
+## 许可证
+
+MIT 许可证，详见 [LICENSE](LICENSE)。Copyright (c) 2026 Ross Li。

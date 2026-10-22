@@ -122,4 +122,8 @@ Includes a regression test that runs the original `build_order` / `Picker` / `ma
 identical JSON (including key order), migration tests, template / strategy tests and an end-to-end test
 against `tools/fake_rds.py` (a tiny fake RDS you can also run by hand: `python tools/fake_rds.py`).
 
-UI strings live in `order_tester/i18n/{zh,en}.json` (generated from `tools/i18n_src.py`).
+UI strings live in `order_tester/i18n/{zh,en}.json` and are edited directly. `tools/i18n_src.py` is a legacy generator that is now outdated; it refuses to run without `--force` because running it would overwrite the current strings.
+
+## License
+
+MIT License - see [LICENSE](LICENSE). Copyright (c) 2026 Ross Li.
