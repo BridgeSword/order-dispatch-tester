@@ -141,12 +141,11 @@ When a station has several direct LM routes, all of those LMs are candidates (fo
 The list shows only stations that have been added to some pool, and no longer lists all the stations in the scene.
 - Columns: Station, Type, Position, Pre-point (the default pre-point in bold, followed by the candidate list), Pools (colored tags; a station can belong to several pools).
 - The Search box and Type filter only filter among these selected stations.
-- The list itself cannot add stations. There are three ways to add stations:
+- The list itself cannot add stations. There are only two ways to add stations:
   - click a station on the **Map** tab;
-  - use **Paste stations manually**;
-  - use the existing add controls next to each pool.
+  - use **Paste stations manually**.
 - To remove a station, click the × on its tag in the pool.
-- When the list is empty, a hint about the ways above is shown ("No station is in any pool yet. Add stations by clicking them on the Map tab, via "Paste stations manually", or with the controls next to each pool.").
+- When the list is empty, a hint about the ways above is shown ("No station is in any pool yet. Add stations by clicking them on the Map tab or via "Paste stations manually".").
 
 ### Orders cancelled in RDS
 - Polling keeps tracking a FAILED order (FAILED is not terminal and can still recover in RDS) until it enters a real terminal state.

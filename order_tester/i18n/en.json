@@ -316,7 +316,7 @@
  "tpl.title": "Description",
  "tpl.unsaved": "unsaved...",
  "vs.num": "variableShape head/tail must be numbers",
- "st.emptySel": "No station is in any pool yet. Add stations by clicking them on the Map tab, via \"Paste stations manually\", or with the controls next to each pool.",
+ "st.emptySel": "No station is in any pool yet. Add stations by clicking them on the Map tab or via \"Paste stations manually\".",
  "st.selOnly": "Read-only: only stations already in a pool are listed",
  "ord.gone": "gone from RDS",
  "ord.goneTip": "RDS answered 'order not found' 3 times in a row (cancelled/withdrawn in RDS); treated as cancelled: duration frozen, no longer counted as stuck. RDS said:",
