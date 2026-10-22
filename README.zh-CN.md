@@ -2,7 +2,7 @@
 
 [English](README.md)
 
-> 详细使用说明见 [docs/USAGE.zh.md](docs/USAGE.zh.md)（每次功能改动同步更新）。
+> 详细使用说明：[中文](docs/USAGE.zh.md) | [English](docs/USAGE.en.md)（**每次功能改动必须同步更新中英文两个版本**）。
 
 
 一个只用 Python 标准库的小型 Web 工具，用于 **AGV 调度系统的压力 / 死锁测试**：

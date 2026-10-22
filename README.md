@@ -2,7 +2,7 @@
 
 [中文说明 / Chinese](README.zh-CN.md)
 
-> Detailed usage guide (Chinese): [docs/USAGE.zh.md](docs/USAGE.zh.md) — keep it updated with every feature change.
+> Detailed usage guide: [English](docs/USAGE.en.md) | [中文](docs/USAGE.zh.md) — **every feature change must update both language versions.**
 
 
 A small, stdlib-only Python web tool for **stress / deadlock testing of AGV dispatch systems**.
