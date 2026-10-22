@@ -618,7 +618,10 @@ def swap_drafts(ids, cfg, t):
 
 # ---------------------------------------------------------------- block-by-block ("逐块下发") dispatch
 # RDS doc: order FAILED/STOPPED/Error; block FAILED/STOPPED/Error. Block MANUAL_FINISHED (手动完成动作块) counts as done.
-INC_STOP = frozenset({"FAILED", "STOPPED", "Error", "ERROR", "CANCELED", "CANCELLED", "TERMINATED", "WITHDRAWN", "SKIPPED"})
+# A *block* in a bad state never stops appending (the order can recover): warn and keep polling.
+# Only a terminal ORDER state stops appending for good.
+INC_STOP = frozenset({"FINISHED", "FAILED", "STOPPED", "Error", "ERROR", "CANCELED", "CANCELLED", "TERMINATED", "WITHDRAWN", "SKIPPED"})
+INC_BLOCK_BAD = frozenset({"FAILED", "STOPPED", "Error", "ERROR"})
 INC_BLOCK_DONE = frozenset({"FINISHED", "MANUAL_FINISHED"})
 INC_ERR_LIMIT = 5  # consecutive addBlocks/markComplete errors before an order is given up
 
@@ -661,10 +664,15 @@ def inc_once():
             ours = [ad.block_id(b) for b in blocks]
             have = sum(1 for b in ours if b in states)
             if have > inc["sent"]: inc["sent"] = have; log("inc_resync", id=oid, sent=have)  # appended before a restart
-            bad = [(b, states[b]) for b in ours[:inc["sent"]] if states.get(b) in INC_STOP]
-            if bad: _inc_stop(o, "block %s %s" % bad[0]); changed = True; continue
-            if js.get("state") in INC_STOP or (js.get("state") in TERMINAL() and js.get("state") != "MANUAL_FINISHED"):
-                _inc_stop(o, "order %s" % js.get("state")); changed = True; continue
+            ost = js.get("state")
+            if ost in INC_STOP or (ost in TERMINAL() and ost != "MANUAL_FINISHED"):
+                _inc_stop(o, "order %s" % ost); changed = True; continue
+            bad = [(b, states[b]) for b in ours[:inc["sent"]] if states.get(b) in INC_BLOCK_BAD]
+            if bad:
+                w = "block %s %s (order %s), waiting for recovery" % (bad[0][0], bad[0][1], ost)
+                if inc.get("warn") != w: inc["warn"] = w; o["changed"] = time.time(); changed = True; log("inc_warn", id=oid, warn=w)
+            elif inc.pop("warn", None) is not None:
+                o["changed"] = time.time(); changed = True; log("inc_recovered", id=oid, order=ost)
             last = ours[inc["sent"] - 1]
             if inc["sent"] < inc["total"] and states.get(last) not in INC_BLOCK_DONE: continue
             nxt = blocks[inc["sent"]] if inc["sent"] < inc["total"] else None

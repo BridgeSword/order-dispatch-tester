@@ -322,11 +322,12 @@
  "ord.goneTip": "RDS 连续 3 次返回查无此单（在 RDS 中取消/撤销），按已取消处理：时长冻结，不再计入卡死。RDS 返回：",
  "disp.bbb": "逐块下发",
  "disp.bbbPoll": "逐块轮询(秒)",
- "disp.bbbTip": "勾选后: 下发时运单只带第一个块且 complete=false; 前一块 FINISHED 后用 /addBlocks 追加下一块, 最后一块追加后 /markComplete. 块 FAILED/STOPPED 或运单取消则停止追加. 对之后点击「下发」/自动派单生效",
+ "disp.bbbTip": "勾选后: 下发时运单只带第一个块且 complete=false; 前一块 FINISHED 后用 /addBlocks 追加下一块, 最后一块追加后 /markComplete. 块 FAILED/Error 只告警并继续轮询, 恢复后继续追加; 仅运单终态(FINISHED/STOPPED/FAILED/Error)或取消时停止追加. 对之后点击「下发」/自动派单生效",
  "inc.tag": "逐块",
  "inc.appending": "逐块下发中",
  "inc.done": "已全部追加并封口(markComplete)",
- "inc.stopped": "已停止追加",
+ "inc.stopped": "运单终态, 已停止追加",
+ "inc.waiting": "块异常, 等待恢复(继续轮询)",
  "inc.resumed": "工具重启后已恢复跟踪",
  "inc.pending": "逐块下发进行中 {n} 单"
 }

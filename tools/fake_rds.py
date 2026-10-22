@@ -6,6 +6,7 @@ Incremental orders (setOrder complete=false, then /addBlocks + /markComplete): b
 BLOCK_DUR s each (a block starts when it exists and its predecessor is FINISHED). All blocks done but not complete
 -> order WAITING; complete -> FINISHED. Order ids containing 'bfail' fail their 2nd block (block + order FAILED);
 'berr' -> 2nd block state Error; 'bmanual' -> 2nd block MANUAL_FINISHED (counts as done). setOrder ids ending in
+'brecover' -> 2nd block FAILED for a while (order stays RUNNING), then the block recovers and FINISHES. ids ending in
 '-nocode' get a success response without 'code' (the doc says code 0 or absent = success). Error codes follow the doc (50003).
 INC_EVENTS records every addBlocks/markComplete with the predecessor block state at that moment."""
 import argparse, io, json, threading, time, zipfile
@@ -34,8 +35,9 @@ def inc_blocks(o, now=None):
     term = o.get("termT"); now = term or now or time.time(); cur = o["t"]; out = []; dead = False
     for i, b in enumerate(o["blocks"]):
         if dead: out.append((b, "CREATED")); continue
-        start = max(cur, b["_added"]); fin = start + BLOCK_DUR
+        start = max(cur, b["_added"]); fin = start + BLOCK_DUR * (4 if i == 1 and "brecover" in o["id"] else 1)
         if now < start: st = "CREATED"
+        elif i == 1 and "brecover" in o["id"] and start + BLOCK_DUR / 2 <= now < fin - BLOCK_DUR / 2: st = "FAILED"
         elif i == 1 and "bfail" in o["id"] and now >= start + BLOCK_DUR / 2: st = "FAILED"
         elif i == 1 and "berr" in o["id"]: st = "Error"
         elif i == 1 and "bmanual" in o["id"] and now >= start + BLOCK_DUR / 2: st = "MANUAL_FINISHED"
@@ -48,10 +50,10 @@ def inc_blocks(o, now=None):
 def inc_state(o):
     bs = [s for _, s in inc_blocks(o)]
     if o.get("terminated"): return "STOPPED"
-    if "FAILED" in bs: return "FAILED"
+    if "FAILED" in bs and "brecover" not in o["id"]: return "FAILED"
     if "Error" in bs: return "Error"
     if bs and all(s in ("FINISHED", "MANUAL_FINISHED") for s in bs): return "FINISHED" if o.get("complete") else "WAITING"
-    if any(s in ("RUNNING", "FINISHED") for s in bs): return "RUNNING"
+    if any(s in ("RUNNING", "FINISHED", "FAILED") for s in bs): return "RUNNING"
     return "CREATED"
 
 def state_of(o):

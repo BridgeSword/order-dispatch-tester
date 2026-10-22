@@ -282,8 +282,8 @@ async function uploadSmap(){let f=$('smapf').files[0];if(!f)return;$('geominfo')
 async function useSmapPath(){$('geominfo').textContent=t('map.parsing');let r=await post('/api/smap_path',{path:$('smap_path').value});if(!r.ok){alert(r.err);$('geominfo').textContent=r.err;return}C.dataset.fitted='';setGeom(r)}
 // ---------------- generate / drafts ----------------
 function dispCfg(){return {base:$('base').value,vehicle:$('veh').value.trim(),group:$('grp').value,priority:+$('pri').value,label:$('label').value.trim(),preOverrides:preOvParse().m,preOverridesText:$('pre_ov').value}}
-function incTag(o){let c=o.inc;if(!c||typeof c!='object')return '';let col=c.status=='done'?'#2a7':c.status=='stopped'?'#c33':'#06c',tip=[t('inc.'+c.status),c.reason||'',c.lastErr||'',c.resumed?t('inc.resumed'):''].filter(Boolean).join('\n');
- return ` <span style="background:#eef;color:${col};padding:0 3px;font-size:11px" title="${esc(tip)}">${t('inc.tag')} ${c.sent}/${c.total}${c.status=='stopped'?' '+t('inc.stopped')+(c.reason?': '+esc(c.reason):''):c.status=='done'?' ✓':''}</span>`}
+function incTag(o){let c=o.inc;if(!c||typeof c!='object')return '';let col=c.status=='done'?'#2a7':c.status=='stopped'?'#c33':c.warn?'#e67e00':'#06c',tip=[t('inc.'+c.status),c.reason||'',c.warn||'',c.lastErr||'',c.resumed?t('inc.resumed'):''].filter(Boolean).join('\n');
+ return ` <span style="background:#eef;color:${col};padding:0 3px;font-size:11px" title="${esc(tip)}">${t('inc.tag')} ${c.sent}/${c.total}${c.status=='stopped'?' '+t('inc.stopped')+(c.reason?': '+esc(c.reason):''):c.status=='done'?' ✓':c.warn?' '+t('inc.waiting')+': '+esc(c.warn):''}</span>`}
 async function generate(){if(dirty&&!(await saveTpl()))return;{let pe=preOvParse().errs;if(pe.length){alert(pe.join('\n'));return}}let roles=cur.pools||[];
  let empty=roles.filter(r=>!(pools[r]||[]).length);if(empty.length){alert(t('gen.poolEmpty',{p:empty.map(plab).join(', ')}));return}
  if($('noself').checked&&roles.length>1&&roles.every(r=>pools[r].length==1)&&new Set(roles.map(r=>pools[r][0])).size<roles.length){alert(t('gen.sameOnly'));return}

@@ -167,7 +167,7 @@
   3. 最后一块追加成功后立即 `POST /markComplete`，body `{"id": <运单ID>}`（封口）。
   - 成功判定：HTTP 200 且返回 `{"code": 0}`；addBlocks/markComplete 连续失败 5 次则停止。
 - 停止条件：任一已下发块为 `FAILED/STOPPED/...`，或运单状态为 `FAILED/STOPPED/CANCELED` 等终态，或 RDS 已查无此单。停止后不再追加，原因写入日志（`inc_stopped`）并在测试订单页显示。
-- 测试订单页「状态」列后有 `逐块 k/N` 标签：蓝=追加中，绿 ✓=已全部追加并封口，红=已停止（附原因，悬停看详情）。顶部状态行显示「逐块下发进行中 n 单」。
+- 测试订单页「状态」列后有 `逐块 k/N` 标签：蓝=追加中，绿 ✓=已全部追加并封口，橙=块异常等待恢复（仍在轮询），红=运单终态已停止（附原因，悬停看详情）。顶部状态行显示「逐块下发进行中 n 单」。
 - 未封口的运单在 RDS 里所有块完成后状态是 `WAITING`（不是 FINISHED），封口后才 FINISHED。
 - 工具重启：追加进度保存在 `sent_orders.json`，启动后自动恢复跟踪（日志 `inc_resume`，标签悬停显示「工具重启后已恢复跟踪」）。恢复时以 orderDetails 返回的块列表为准，已在 RDS 中的块不会重复追加。
 - 日志事件：`inc_start`、`inc_add`、`inc_resync`、`inc_error`、`inc_done`、`inc_stopped`。
@@ -175,5 +175,5 @@
   - `setOrder` 的 `complete`（bool，false=不封口，之后可 addBlocks）；`addBlocks` body `{id, blocks, complete?}`（`complete` 需 ≥0.1.8.22090102，本工具不用它封口）；`markComplete` body `{id}`（也支持 `{idList}`，本工具不用）。
   - 成功判定：HTTP 200 且 `code` 为 0 **或缺省**；错误码 40000/50000/50001/50002/50003（对已封口运单 addBlocks 返回 50003 "order is complete"）。
   - 运单状态：CREATED / WAITING / RUNNING / SUSPENDED / FINISHED / FAILED / STOPPED / Error / TOBEDISPATCHED；动作块状态另有 POSTING、MANUAL_FINISHED。
-  - 逐块追加：前一块 `FINISHED` 或 `MANUAL_FINISHED`（手动完成）才追加下一块；块或运单为 `FAILED` / `STOPPED` / `Error` 时停止追加。SUSPENDED、POSTING、块级 WAITING 只等待，不停止。
+  - 逐块追加：前一块 `FINISHED` 或 `MANUAL_FINISHED`（手动完成）才追加下一块；**块**为 `FAILED` / `STOPPED` / `Error` 时只记录告警（标签变橙「块异常, 等待恢复」）并继续轮询，块恢复并 `FINISHED`/`MANUAL_FINISHED` 后继续追加；只有**运单** `state` 为终态 `FINISHED` / `STOPPED` / `FAILED` / `Error`（或取消）时才停止追加，并记录原因（如 `order FAILED`）。SUSPENDED、POSTING、块级 WAITING 只等待，不停止。
   - 注意：RDS 默认允许 addBlocks 对不存在的运单 ID **自动创建运单**（参数 CreateNewOrderWhileAddBlocks），所以工具每次追加前都先用 orderDetails 确认运单仍存在；查无此单就停止，不再追加。

@@ -91,6 +91,18 @@ class IncTest(unittest.TestCase):
         self.assertIn("Error", e["inc"]["reason"]); self.assertEqual(e["inc"]["sent"], 2)
         self.assertEqual(m["inc"]["sent"], len(self.t["steps"]))
 
+    def test_block_failed_then_recovers(self):
+        self.draft("dl-brecover1"); C.S["running"] = True; C.send_batch(["dl-brecover1"], 0, 0, None, inc=True)
+        o = C.S["orders"]["dl-brecover1"]; seen = []
+        def chk():
+            if o["inc"].get("warn"): seen.append(o["inc"]["warn"])
+            return o["inc"]["status"] != "appending"
+        self.assertTrue(self.run_until(chk))
+        self.assertEqual(o["inc"]["status"], "done", o["inc"]); self.assertEqual(o["inc"]["sent"], len(self.t["steps"]))
+        self.assertTrue(seen and "FAILED" in seen[0], seen); self.assertNotIn("warn", o["inc"])
+        ev = [e for e in fake_rds.INC_EVENTS if e["id"] == "dl-brecover1"]
+        self.assertTrue(all(e["prevState"] in ("FINISHED", "MANUAL_FINISHED") for e in ev[:-1]), ev)
+
     def test_rds_doc_response_codes(self):
         rec = self.draft("dl-x-nocode")
         self.assertEqual(C.AD().submit(C.AD().incremental_payload(rec["body"], 1)), (True, None))  # code absent = success

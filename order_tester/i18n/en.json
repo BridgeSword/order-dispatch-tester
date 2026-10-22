@@ -322,11 +322,12 @@
  "ord.goneTip": "RDS answered 'order not found' 3 times in a row (cancelled/withdrawn in RDS); treated as cancelled: duration frozen, no longer counted as stuck. RDS said:",
  "disp.bbb": "Block-by-block",
  "disp.bbbPoll": "Block poll (s)",
- "disp.bbbTip": "When on: orders are sent with only the first block (complete=false); the next block is appended via /addBlocks once the previous one is FINISHED, then /markComplete after the last. Stops on FAILED/STOPPED/cancel. Applies to subsequent sends",
+ "disp.bbbTip": "When on: orders are sent with only the first block (complete=false); the next block is appended via /addBlocks once the previous one is FINISHED, then /markComplete after the last. A FAILED/Error block only warns and keeps polling; appending resumes on recovery. Stops only when the order is terminal (FINISHED/STOPPED/FAILED/Error) or cancelled. Applies to subsequent sends",
  "inc.tag": "blocks",
  "inc.appending": "appending blocks",
  "inc.done": "all blocks appended, marked complete",
- "inc.stopped": "appending stopped",
+ "inc.stopped": "order terminal, appending stopped",
+ "inc.waiting": "block failed, waiting for recovery (still polling)",
  "inc.resumed": "resumed after tool restart",
  "inc.pending": "{n} block-by-block orders open"
 }
