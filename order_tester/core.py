@@ -485,6 +485,7 @@ def load_sent():
             now = time.time()
             for k, v in (("pair", ["?", "?"]), ("vehicle", ""), ("sig", ""), ("error", None), ("sent", now), ("changed", now), ("pre", "")): o.setdefault(k, v)
             S["orders"][o["id"]] = _upgrade_record(o); n += 1
+    inc_revive()
     try: assign_hist_batches()
     except Exception as e: print("assign_hist_batches error:", e, flush=True)
     return n
@@ -618,12 +619,36 @@ def swap_drafts(ids, cfg, t):
 
 # ---------------------------------------------------------------- block-by-block ("逐块下发") dispatch
 # RDS doc: order FAILED/STOPPED/Error; block FAILED/STOPPED/Error. Block MANUAL_FINISHED (手动完成动作块) counts as done.
-# A *block* in a bad state never stops appending (the order can recover): warn and keep polling.
-# Only a terminal ORDER state stops appending for good.
-INC_STOP = frozenset({"FINISHED", "FAILED", "STOPPED", "Error", "ERROR", "CANCELED", "CANCELLED", "TERMINATED", "WITHDRAWN", "SKIPPED"})
+# Rule: appending stops for good ONLY on a terminal ORDER state (FINISHED / STOPPED, plus cancel/withdraw variants;
+# a user cancel in the tool terminates the order in RDS -> STOPPED). Everything else - order FAILED/Error/SUSPENDED/
+# WAITING/unknown, bad blocks, orderDetails errors/timeouts/"not found", addBlocks errors - only pauses (warning) and
+# keeps polling: RDS has been seen to report an order FAILED transiently and then recover.
+INC_STOP = frozenset({"FINISHED", "STOPPED", "CANCELED", "CANCELLED", "TERMINATED", "WITHDRAWN", "SKIPPED"})
 INC_BLOCK_BAD = frozenset({"FAILED", "STOPPED", "Error", "ERROR"})
+INC_ORDER_BAD = frozenset({"FAILED", "Error", "ERROR"})  # pause only
 INC_BLOCK_DONE = frozenset({"FINISHED", "MANUAL_FINISHED"})
-INC_ERR_LIMIT = 5  # consecutive addBlocks/markComplete errors before an order is given up
+INC_ERR_LIMIT = 5  # consecutive addBlocks/markComplete errors before a warning is shown (appending keeps retrying)
+
+def _inc_revivable(inc):
+    """stopped by an older version for a non-terminal reason (order FAILED/Error, missing, repeated addBlocks errors)"""
+    if not isinstance(inc, dict) or inc.get("status") != "stopped" or inc.get("sent", 0) < 1: return False
+    r = str(inc.get("reason") or "")
+    if r.startswith("setOrder"): return False  # order never created in RDS
+    if r.startswith("order "):
+        return r[6:].split(" ")[0] not in INC_STOP  # FAILED / Error / missing ...
+    return " failed " in r and " times" in r
+
+def inc_revive():
+    """re-open block-by-block orders wrongly stopped by older versions; returns revived ids"""
+    out = []
+    with lock:
+        for k, o in S["orders"].items():
+            inc = o.get("inc")
+            if o.get("body") and _inc_revivable(inc):
+                old = inc.get("reason"); inc.update(status="appending", reason="", errs=0, revived=time.time(), warn="revived (was stopped: %s)" % old)
+                inc.pop("tEnd", None); o["changed"] = time.time(); out.append(k)
+                log("inc_revived", id=k, was=old, sent=inc.get("sent"), total=inc.get("total"))
+    return out
 
 def inc_enabled(cfg=None):
     return bool((cfg if cfg is not None else S["cfg"]).get("blockByBlock")) and getattr(AD(), "supports_incremental", False)
@@ -650,26 +675,32 @@ def inc_pending():
 def inc_once():
     """one pass over open block-by-block orders: append the next block once the previous one is FINISHED.
     Idempotent: blocks already present in the dispatcher (e.g. appended before a restart) are not sent again."""
-    ad = AD(); changed = False
+    ad = AD(); changed = bool(inc_revive())
     for oid in inc_pending():
         with lock:
             o = S["orders"].get(oid)
             if not o or not o.get("body"): continue
             inc = o["inc"]; blocks = ad.payload_blocks(o["body"])
-        js = ad.order_status(oid)
-        if js is None: continue  # dispatcher unreachable: retry next tick
+        try: js = ad.order_status(oid)
+        except Exception as e: js = None; log("inc_error", id=oid, act="orderDetails", err=str(e))
+        if js is None: continue  # dispatcher unreachable / timeout: pause, retry next tick
         with lock:
-            if js.get("missing"): _inc_stop(o, "order missing in dispatcher: " + str(js.get("msg", ""))); changed = True; continue
+            if js.get("missing"):  # not found (maybe transient): pause and keep polling
+                w = "order not found in dispatcher (%s), waiting" % js.get("msg", "")
+                if inc.get("warn") != w: inc["warn"] = w; o["changed"] = time.time(); changed = True; log("inc_warn", id=oid, warn=w)
+                continue
             ids = js.get("blockIds") or []; states = dict(zip(ids, js.get("blockStates") or []))
             ours = [ad.block_id(b) for b in blocks]
             have = sum(1 for b in ours if b in states)
             if have > inc["sent"]: inc["sent"] = have; log("inc_resync", id=oid, sent=have)  # appended before a restart
             ost = js.get("state")
-            if ost in INC_STOP or (ost in TERMINAL() and ost != "MANUAL_FINISHED"):
+            if ost in INC_STOP:
                 _inc_stop(o, "order %s" % ost); changed = True; continue
             bad = [(b, states[b]) for b in ours[:inc["sent"]] if states.get(b) in INC_BLOCK_BAD]
-            if bad:
-                w = "block %s %s (order %s), waiting for recovery" % (bad[0][0], bad[0][1], ost)
+            w = None
+            if ost in INC_ORDER_BAD: w = "order %s, paused, waiting for recovery" % ost
+            elif bad: w = "block %s %s (order %s), waiting for recovery" % (bad[0][0], bad[0][1], ost)
+            if w:
                 if inc.get("warn") != w: inc["warn"] = w; o["changed"] = time.time(); changed = True; log("inc_warn", id=oid, warn=w)
             elif inc.pop("warn", None) is not None:
                 o["changed"] = time.time(); changed = True; log("inc_recovered", id=oid, order=ost)
@@ -686,8 +717,9 @@ def inc_once():
             if not ok:
                 inc["errs"] = inc.get("errs", 0) + 1; inc["lastErr"] = "%s: %s" % (act, err)
                 log("inc_error", id=oid, act=act, err=err, n=inc["errs"])
-                if inc["errs"] >= INC_ERR_LIMIT: _inc_stop(o, "%s failed %d times: %s" % (act, inc["errs"], err))
+                if inc["errs"] >= INC_ERR_LIMIT: inc["warn"] = "%s failed %d times (retrying): %s" % (act, inc["errs"], err)
                 continue
+            if inc.get("errs"): inc.pop("warn", None)
             inc["errs"] = 0; inc.pop("lastErr", None)
             if nxt is not None:
                 inc["sent"] += 1; log("inc_add", id=oid, block=ad.block_id(nxt), sent=inc["sent"], total=inc["total"])

@@ -4,8 +4,8 @@ Scene: AP1..AP12 with LM1..LM12 pre-points (curve LMn -> APn), robot group grpA 
 Orders progress CREATED -> RUNNING -> FINISHED (order ids containing 'fail' go FAILED, then RUNNING again).
 Incremental orders (setOrder complete=false, then /addBlocks + /markComplete): blocks run one after another,
 BLOCK_DUR s each (a block starts when it exists and its predecessor is FINISHED). All blocks done but not complete
--> order WAITING; complete -> FINISHED. Order ids containing 'bfail' fail their 2nd block (block + order FAILED);
-'berr' -> 2nd block state Error; 'bmanual' -> 2nd block MANUAL_FINISHED (counts as done). setOrder ids ending in
+-> order WAITING; complete -> FINISHED. Order ids containing 'bfail' fail their 2nd block for a while
+(block + order FAILED, like the real RDS), then it recovers and FINISHES; 'berr' -> same with block + order Error; 'bmanual' -> 2nd block MANUAL_FINISHED (counts as done). setOrder ids ending in
 'brecover' -> 2nd block FAILED for a while (order stays RUNNING), then the block recovers and FINISHES. ids ending in
 '-nocode' get a success response without 'code' (the doc says code 0 or absent = success). Error codes follow the doc (50003).
 INC_EVENTS records every addBlocks/markComplete with the predecessor block state at that moment."""
@@ -35,11 +35,10 @@ def inc_blocks(o, now=None):
     term = o.get("termT"); now = term or now or time.time(); cur = o["t"]; out = []; dead = False
     for i, b in enumerate(o["blocks"]):
         if dead: out.append((b, "CREATED")); continue
-        start = max(cur, b["_added"]); fin = start + BLOCK_DUR * (4 if i == 1 and "brecover" in o["id"] else 1)
+        start = max(cur, b["_added"]); rec = i == 1 and any(k in o["id"] for k in ("brecover", "bfail", "berr"))
+        fin = start + BLOCK_DUR * (4 if rec else 1)
         if now < start: st = "CREATED"
-        elif i == 1 and "brecover" in o["id"] and start + BLOCK_DUR / 2 <= now < fin - BLOCK_DUR / 2: st = "FAILED"
-        elif i == 1 and "bfail" in o["id"] and now >= start + BLOCK_DUR / 2: st = "FAILED"
-        elif i == 1 and "berr" in o["id"]: st = "Error"
+        elif rec and start + BLOCK_DUR / 2 <= now < fin - BLOCK_DUR / 2: st = "Error" if "berr" in o["id"] else "FAILED"
         elif i == 1 and "bmanual" in o["id"] and now >= start + BLOCK_DUR / 2: st = "MANUAL_FINISHED"
         elif now >= fin: st = "FINISHED"
         else: st = "STOPPED" if term else "RUNNING"

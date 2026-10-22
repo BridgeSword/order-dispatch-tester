@@ -53,14 +53,42 @@ class IncTest(unittest.TestCase):
         time.sleep(fake_rds.BLOCK_DUR + 0.1)
         self.assertEqual(C.AD().order_status(ids[0])["state"], "FINISHED")
 
-    def test_stop_on_failed_block(self):
+    def test_order_failed_then_recovers(self):
         self.draft("dl-bfail1"); C.S["running"] = True; C.send_batch(["dl-bfail1"], 0, 0, None, inc=True)
-        o = C.S["orders"]["dl-bfail1"]
-        self.assertTrue(self.run_until(lambda: o["inc"]["status"] == "stopped"))
-        self.assertIn("FAILED", o["inc"]["reason"]); self.assertEqual(o["inc"]["sent"], 2)
-        n0 = len(fake_rds.INC_EVENTS); time.sleep(0.5); C.inc_once()
-        self.assertEqual(len(fake_rds.INC_EVENTS), n0)  # nothing appended after the failure
-        self.assertFalse(any(e["path"] == "/markComplete" for e in fake_rds.INC_EVENTS))
+        o = C.S["orders"]["dl-bfail1"]; seen = []
+        def chk():
+            if o["inc"].get("warn"): seen.append(o["inc"]["warn"])
+            return o["inc"]["status"] != "appending"
+        self.assertTrue(self.run_until(chk))
+        self.assertEqual(o["inc"]["status"], "done", o["inc"]); self.assertEqual(o["inc"]["sent"], len(self.t["steps"]))
+        self.assertTrue(any("order FAILED" in w for w in seen), seen)  # paused on order FAILED, not stopped
+        ev = [e for e in fake_rds.INC_EVENTS if e["id"] == "dl-bfail1"]
+        self.assertTrue(all(e["prevState"] in ("FINISHED", "MANUAL_FINISHED") for e in ev[:-1]), ev)
+
+    def test_order_missing_or_unreachable_pauses(self):
+        self.draft("dl-ms"); C.S["running"] = True; C.send_batch(["dl-ms"], 0, 0, None, inc=True)
+        o = C.S["orders"]["dl-ms"]; real = C.AD().order_status
+        for fake in (lambda oid: {"missing": True, "msg": "x"}, lambda oid: None, lambda oid: {"state": "SUSPENDED", "blockIds": [], "blockStates": []}, lambda oid: {"state": "WEIRD"}):
+            C.AD().order_status = fake
+            try: C.inc_once()
+            finally: C.AD().order_status = real
+            self.assertEqual(o["inc"]["status"], "appending")
+        self.assertTrue(self.run_until(lambda: o["inc"]["status"] == "done"))
+
+    def test_revive_previously_stopped(self):
+        self.draft("dl-rv"); C.S["running"] = True; C.send_batch(["dl-rv"], 0, 0, None, inc=True)
+        o = C.S["orders"]["dl-rv"]
+        o["inc"].update(status="stopped", reason="order FAILED", tEnd=time.time())  # as written by the old version
+        C.save_sent(); C.S["orders"].clear(); C.load_sent()
+        o = C.S["orders"]["dl-rv"]
+        self.assertEqual(o["inc"]["status"], "appending"); self.assertIn("revived", o["inc"])
+        self.assertTrue(self.run_until(lambda: o["inc"]["status"] == "done"))
+        ids = [b["blockId"] for b in fake_rds.ORDERS["dl-rv"]["blocks"]]
+        self.assertEqual(len(ids), len(set(ids))); self.assertEqual(len(ids), len(self.t["steps"]))
+        # also revived on the next poll without restart; terminal reasons are not revived
+        o["inc"].update(status="stopped", reason="order Error"); C.inc_revive(); self.assertEqual(o["inc"]["status"], "appending")
+        for r in ("order STOPPED", "order FINISHED", "setOrder: boom"):
+            o["inc"].update(status="stopped", reason=r); self.assertEqual(C.inc_revive(), [])
 
     def test_stop_on_cancel(self):
         self.draft("dl-cx"); C.S["running"] = True; C.send_batch(["dl-cx"], 0, 0, None, inc=True)
@@ -83,12 +111,15 @@ class IncTest(unittest.TestCase):
         ids = [b["blockId"] for b in fake_rds.ORDERS["dl-rs"]["blocks"]]
         self.assertEqual(len(ids), len(set(ids))); self.assertEqual(len(ids), len(self.t["steps"]))
 
-    def test_error_block_stops_manual_finished_continues(self):
+    def test_error_pauses_manual_finished_continues(self):
         self.draft("dl-berr1"); self.draft("dl-bmanual1", "AP3", "AP4")
         C.S["running"] = True; C.send_batch(["dl-berr1", "dl-bmanual1"], 0, 0, None, inc=True)
-        e, m = C.S["orders"]["dl-berr1"], C.S["orders"]["dl-bmanual1"]
-        self.assertTrue(self.run_until(lambda: e["inc"]["status"] == "stopped" and m["inc"]["status"] == "done"))
-        self.assertIn("Error", e["inc"]["reason"]); self.assertEqual(e["inc"]["sent"], 2)
+        e, m = C.S["orders"]["dl-berr1"], C.S["orders"]["dl-bmanual1"]; seen = []
+        def chk():
+            if e["inc"].get("warn"): seen.append(e["inc"]["warn"])
+            return e["inc"]["status"] == "done" and m["inc"]["status"] == "done"
+        self.assertTrue(self.run_until(chk))
+        self.assertTrue(any("Error" in w for w in seen), seen)
         self.assertEqual(m["inc"]["sent"], len(self.t["steps"]))
 
     def test_block_failed_then_recovers(self):
