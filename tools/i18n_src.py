@@ -1,6 +1,20 @@
 # -*- coding: utf-8 -*-
-"""Source of order_tester/i18n/{zh,en}.json. Edit here and run: python tools/i18n_src.py"""
-import json, os
+# =============================================================================
+# WARNING - OUTDATED, DO NOT RUN.
+# This file is NO LONGER the source of truth. It differs from the committed
+# order_tester/i18n/zh.json and order_tester/i18n/en.json (those were edited
+# directly): e.g. it has "st.pick" = "Add to pool" while the JSON has "Pools",
+# and it lacks keys the JSON has (st.emptySel, st.selOnly, ord.gone, ord.goneTip).
+# Running it OVERWRITES the current UI strings in zh.json/en.json with these
+# stale ones. Edit the JSON files directly. (Running now requires --force.)
+# =============================================================================
+"""OUTDATED - do not run. Formerly the source of order_tester/i18n/{zh,en}.json.
+
+The JSON files have since been edited directly and now differ from this file;
+running it overwrites the current UI strings with stale ones. Edit
+order_tester/i18n/{zh,en}.json instead. The script refuses to run without --force.
+"""
+import json, os, sys
 D = {
  "app.title": ("订单派发测试工具", "Order Dispatch Tester"),
  "tab.cfg": ("配置与派单", "Config & Dispatch"), "tab.map": ("地图", "Map"), "tab.rob": ("机器人", "Robots"), "tab.ord": ("测试订单", "Test Orders"),
@@ -109,6 +123,10 @@ D = {
  "srv.tplExists": ("模板 {name} 已存在", "Template {name} exists"),
 }
 if __name__ == "__main__":
+    if "--force" not in sys.argv[1:]:
+        sys.exit("tools/i18n_src.py is OUTDATED and differs from order_tester/i18n/{zh,en}.json; "
+                 "running it would overwrite the current UI strings. Edit the JSON files directly, "
+                 "or pass --force if you really mean it.")
     out = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "order_tester", "i18n")
     os.makedirs(out, exist_ok=True)
     for i, lang in enumerate(("zh", "en")):
