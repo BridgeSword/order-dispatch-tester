@@ -17,3 +17,15 @@ class StationListReadOnlyTest(unittest.TestCase):
         for l in ("zh", "en"):
             d = json.load(open(os.path.join(D, "i18n", l + ".json"), encoding="utf-8"))
             for k in ("st.pick", "st.emptySel", "st.selOnly"): self.assertTrue(d.get(k), (l, k))
+
+class M4UiTest(unittest.TestCase):
+    def test_m4_fields_and_i18n(self):
+        html = open(os.path.join(D, "static", "index.html"), encoding="utf-8").read()
+        self.assertIn("id=m4appkey type=password", html); self.assertIn("id=m4pass type=password", html)
+        self.assertIn("<option value=rds>RDS</option>", html)  # RDS first = default
+        keys = set(re.findall(r"data-i18n(?:-ph)?=([\w.]+)", html))
+        for l in ("zh", "en"):
+            d = json.load(open(os.path.join(D, "i18n", l + ".json"), encoding="utf-8"))
+            self.assertEqual([k for k in keys if not d.get(k)], [], l)
+        zh = json.load(open(os.path.join(D, "i18n", "zh.json"), encoding="utf-8")); en = json.load(open(os.path.join(D, "i18n", "en.json"), encoding="utf-8"))
+        self.assertEqual(set(zh), set(en))

@@ -415,4 +415,23 @@ async function tick(){try{let r=await (await fetch('/api/state')).json();if(r.gr
   if(jsonOpen.has(o.id))items.push({k:'json:'+o.id,c:['',{h:`<pre class=jbox style="margin:0;max-height:300px;overflow:auto;background:#f6f6f6;font-size:11px">${esc(jsonCache[o.id]||t('msg.loading'))}</pre>`,span:14}]})}}
  syncRows(ordTable.tBodies[0],items);
  renderRobots(r,still);draw()}catch(e){console.error(e)}}
-loadI18n().then(()=>{initFilt();initSub();return initSettings()}).finally(()=>{setInterval(tick,1500);tick()});
+loadI18n().then(()=>{initFilt();initSub();m4Load();return initSettings()}).finally(()=>{setInterval(tick,1500);tick()});
+
+// ---------------- dispatcher adapter (RDS default) / M4 connection profiles ----------------
+// M4 secrets (app-key, password) are stored server-side only (settings.json, gitignored); the API returns them masked.
+let M4P={active:'default',profiles:{}};
+async function m4Load(){try{let r=await (await fetch('/api/m4')).json();M4P=r;$('adsel').value=r.adapter||'rds';$('m4box').style.display=r.adapter==='m4'?'':'none';m4Fill()}catch(e){}}
+function m4Fill(){let ns=Object.keys(M4P.profiles||{});if(!ns.length)ns=[M4P.active||'default'];
+ $('m4prof').innerHTML=ns.map(n=>`<option${n===M4P.active?' selected':''}>${esc(n)}</option>`).join('');m4Show(M4P.active||ns[0])}
+function m4Show(n){let p=(M4P.profiles||{})[n]||{};$('m4name').value=n;$('m4base').value=p.base||'';$('m4scene').value=p.sceneId||'';$('m4auth').value=p.auth||'';
+ $('m4appid').value=p.appId||'';$('m4appkey').value=p.appKey||'';$('m4user').value=p.username||'';$('m4pass').value=p.password||'';$('m4op').value=p.opMode||'binTask'}
+function m4Form(){return {base:$('m4base').value.trim(),sceneId:$('m4scene').value.trim(),auth:$('m4auth').value,appId:$('m4appid').value.trim(),appKey:$('m4appkey').value,
+ username:$('m4user').value.trim(),password:$('m4pass').value,opMode:$('m4op').value}}
+async function m4Save(){let r=await post('/api/m4',{name:$('m4name').value.trim()||'default',profile:m4Form()});if(r.ok){M4P=r;m4Fill();$('m4msg').textContent=t('m4.saved')}else $('m4msg').textContent=r.err||'?'}
+async function m4Del(){let n=$('m4name').value.trim();if(!n||!confirm(t('m4.delQ',{name:n})))return;let r=await post('/api/m4',{name:n,delete:true});if(r.ok){M4P=r;m4Fill()}}
+async function m4Test(){$('m4msg').textContent='…';let r=await post('/api/m4_test',{name:$('m4prof').value,profile:m4Form()});
+ if(!r.ok){$('m4msg').textContent=t('m4.testFail',{err:r.err||r.ping||''});return}
+ let sc=r.scenes||[];$('m4scenes').innerHTML=`<option value="">${esc(t('m4.pickScene'))}</option>`+sc.map(s=>`<option value="${esc(s.id)}">${esc(s.name+' ('+s.id+')'+(s.disabled?' ✗':''))}</option>`).join('');
+ $('m4msg').textContent=t('m4.testOk',{auth:r.auth,n:sc.length})}
+async function setAdapter(a){let r=await post('/api/adapter',{adapter:a});if(!r.ok){alert(r.err);return}$('m4box').style.display=a==='m4'?'':'none';$('m4msg').textContent='';
+ try{loadTemplates()}catch(e){}}

@@ -23,6 +23,7 @@ The sub-tabs at the top switch between pages; the current sub-tab is remembered 
 
 ### 2.1 Connection (连接)
 - Dispatcher URL (调度系统地址), Poll interval (s) (轮询间隔(秒)), Stuck threshold (s) (卡死阈值(秒)), Vehicle idle threshold (s) (车辆静止阈值(秒)), Dispatcher adapter (调度适配器), Language (界面语言) (Chinese/English, kept in sync with the top-right switch).
+- **Dispatcher** (调度系统): `RDS` (default) or `M4`. Switching takes effect immediately and is saved in the local `settings.json`. RDS keeps using **Dispatcher URL**; M4 uses the URL of the selected M4 profile. See "M4 dispatcher" below.
 
 ### 2.2 Pools (站点池)
 - **Load stations from scene** (从调度系统场景加载站点): **the only manual entry point for loading the scene**. In one go it pulls the stations, pre-points, robot groups, scene geometry (routes) and point cloud (via `/downloadScene` when necessary) from RDS `/scene`, and it always fetches afresh; the Map tab reuses the result directly (see section 7).
@@ -179,3 +180,48 @@ The list shows only stations that have been added to some pool, and no longer li
   - Order states: CREATED / WAITING / RUNNING / SUSPENDED / FINISHED / FAILED / STOPPED / Error / TOBEDISPATCHED; action block states additionally include POSTING and MANUAL_FINISHED.
   - Block-by-block appending: the next block is appended only when the previous block is `FINISHED` or `MANUAL_FINISHED` (manually finished); when a **block** is `FAILED` / `STOPPED` / `Error`, only a warning is logged (the tag turns orange, "order/block abnormal, paused until recovery") and polling continues, and appending resumes after the block recovers and reaches `FINISHED`/`MANUAL_FINISHED`; an **order** that is `FAILED` / `Error` likewise only pauses (orange tag); appending stops only when the order `state` is a terminal `FINISHED` / `STOPPED` (or cancelled). SUSPENDED, WAITING, POSTING and unknown states only wait and do not stop.
   - Note: by default RDS allows addBlocks on a non-existent order ID to **create the order automatically** (parameter CreateNewOrderWhileAddBlocks), so before every append the tool first confirms with orderDetails that the order still exists; if the order is not found, it stops and does not append any more.
+
+## M4 dispatcher (M4 调度系统)
+
+The tool can also drive an M4 fleet server instead of RDS. RDS stays the default; nothing changes for RDS users.
+
+### Setup
+1. On **Config & Dispatch → Connection**, set **Dispatcher** (调度系统) to `M4`. The **M4 connection** (M4 连接) box appears.
+2. Fill in one profile per M4 server. Each profile keeps its own values:
+   - **Profile** (配置) / profile name: any name, e.g. `lab`.
+   - **M4 URL** (M4 地址): `http://<m4-host>:<port>`. Ask the M4 administrator for the HTTP port; it differs between installations.
+   - **Scene ID** (场景 ID): the M4 scene orders are created in. Click **Test connection** (测试连接) to list the scenes, then pick one from the list.
+   - **Auth** (认证): **Auto** (自动; App ID / App key if both are filled in, otherwise username/password), **App ID / App key** (应用 ID / 密钥; machine clients, created by an M4 admin under proxy users), **Username / password** (用户名 / 密码; uses `POST /api/sign-in` and keeps the session cookie, signing in again after a 401), or **None** (无).
+   - **App ID** (应用 ID), **App key** (应用密钥), **Username** (用户名), **Password** (密码).
+   - **Step action field** (步骤动作字段): `binTask` (default) sends `rbkArgs: {"binTask": <operation>, ...args}`; `operation` sends `rbkArgs: {"operation": <operation>, ...args}`. Script steps always use `operation: "Script"`.
+3. Click **Save profile** (保存配置). **Delete profile** (删除配置) removes the profile shown.
+
+The app key and password are stored only in the local, gitignored `settings.json`. They are masked as `******` in the UI, in `/api/settings` and `/api/m4`, and they never appear in the logs. Leaving `******` in a field keeps the stored value. As an alternative, the environment variables `ODT_M4_APP_ID`, `ODT_M4_APP_KEY`, `ODT_M4_USER`, `ODT_M4_PASSWORD` and `ODT_M4_SCENE` fill in any field that is empty in the profile.
+
+### Per-step overrides (template step `args`)
+These keys are read by the M4 adapter and are not sent inside `rbkArgs`:
+- `m4Mode`: `"binTask"` or `"operation"`, overriding **Step action field** for this step.
+- `m4BinTask`: the bin task name to send instead of the operation name, e.g. `"Load"`.
+- `forLoad` / `forUnload`: by default a step whose operation contains "unload" gets `forUnload: true`, one containing "load" gets `forLoad: true`, and other steps get both false. Set them explicitly to override.
+
+### How the M4 adapter maps things
+- RDS order = M4 transport order; RDS block = M4 step (step `id` = order ID + block suffix, same as the RDS blockId); RDS `complete` = M4 `stepFixed`.
+- Normal send: `POST /api/fleet/orders/create` with all steps and `stepFixed: true`. **Vehicle** (指定车辆) and **Robot group** (机器人组) become `expectedRobotNames` / `expectedRobotGroups`, and **label (optional)** (label(可选)) becomes `externalId`.
+- **Block-by-block** (逐块下发): create with only the first step and `stepFixed: false`, then `POST /api/fleet/orders/add-steps` for each next step once the previous step is `Done`, then `POST /api/fleet/orders/complete-order` to seal the order.
+- Status is polled with `GET /api/fleet/orders/query-order-detail` at **Poll interval (s)** and **Block poll (s)**, the same as RDS (no callbacks). States are shown in the tool's RDS-style names:
+
+| M4 | Shown as | Effect |
+|---|---|---|
+| Done | FINISHED | terminal, appending stops |
+| Cancelled | STOPPED | terminal, appending stops |
+| any status with `fault: true` | FAILED | pause only (warning), keep polling and appending |
+| ToBeAllocated / Allocated / Executing | TOBEDISPATCHED / CREATED / RUNNING | normal |
+| Pending | WAITING if not sealed, otherwise RUNNING | normal |
+| Cancelling, Withdrawing, unknown | as reported, upper case | not terminal, keep polling |
+
+  Query errors (HTTP errors, 401/403, timeouts) and add-steps/complete-order errors only pause, exactly like RDS. Only Done and Cancelled stop appending.
+- Robots: `GET /api/fleet/robots/all-all?sceneId=`. Stations and map: `GET /api/fleet/scenes/schema/{sceneId}`, using `structure.areas[].mergedMap` (points, paths, bins). Unknown fields are ignored. A station's pre-point is the nearest `LM` point connected to it by a path, and bins are listed under their point.
+- **Cancel selected** (取消选中订单) and **Cancel all open test orders** (取消全部未完成测试订单) use `POST /api/fleet/orders/cancel {sceneId, orderId}`.
+
+### Testing without a real M4
+`python tools/fake_m4.py --port 18090` starts a mock M4 server with mock data (scene `scene-1`, app ID/key `mock-app`/`mock-key`, login `mockuser`/`mockpass`). Order IDs containing `fault` report a fault for a while and then recover, `qerr` makes the order query fail for a while, and `xcancel` gets cancelled in M4 after the first step.

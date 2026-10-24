@@ -23,6 +23,7 @@
 
 ### 2.1 连接
 - 调度系统地址、轮询间隔（秒）、卡死阈值（秒）、车辆静止阈值（秒）、调度适配器、界面语言（中/英，与右上角同步）。
+- **调度系统**：`RDS`（默认）或 `M4`。切换立即生效，并保存在本地 `settings.json`。RDS 仍使用"调度系统地址"；M4 使用所选 M4 配置的地址。详见下文"M4 调度系统"。
 
 ### 2.2 站点池
 - **从调度系统场景加载站点**：**唯一的手动加载场景入口**。一次性从 RDS `/scene` 拉取站点、前置点、机器人组、场景几何（路线）和点云（必要时 `/downloadScene`），总是重新拉取；地图页直接复用结果（见第 7 节）。
@@ -179,3 +180,48 @@
   - 运单状态：CREATED / WAITING / RUNNING / SUSPENDED / FINISHED / FAILED / STOPPED / Error / TOBEDISPATCHED；动作块状态另有 POSTING、MANUAL_FINISHED。
   - 逐块追加：前一块 `FINISHED` 或 `MANUAL_FINISHED`（手动完成）才追加下一块；**块**为 `FAILED` / `STOPPED` / `Error` 时只记录告警（标签变橙「块异常, 等待恢复」）并继续轮询，块恢复并 `FINISHED`/`MANUAL_FINISHED` 后继续追加；**运单** `FAILED` / `Error` 同样只暂停（标签橙「运单 FAILED, 暂停」）；只有运单 `state` 为终态 `FINISHED` / `STOPPED`（或取消）时才停止追加。SUSPENDED、WAITING、POSTING 及未知状态只等待，不停止。
   - 注意：RDS 默认允许 addBlocks 对不存在的运单 ID **自动创建运单**（参数 CreateNewOrderWhileAddBlocks），所以工具每次追加前都先用 orderDetails 确认运单仍存在；查无此单就停止，不再追加。
+
+## M4 调度系统
+
+本工具也可以对接 M4 调度服务器来代替 RDS。默认仍为 RDS，RDS 用户不受影响。
+
+### 配置
+1. 在"配置与派单 → 连接"中，把"调度系统"设为 `M4`，会出现"M4 连接"区域。
+2. 每台 M4 服务器填写一个配置，各配置分别保存自己的值：
+   - 配置 / 配置名：任意名称，例如 `lab`。
+   - M4 地址：`http://<m4-host>:<port>`。HTTP 端口因现场而异，请向 M4 管理员确认。
+   - 场景 ID：运单创建所在的 M4 场景。点"测试连接"可列出场景，然后从下拉列表中选择。
+   - 认证："自动"（应用 ID 和密钥都已填写时使用它们，否则使用用户名/密码）、"应用 ID / 密钥"（程序客户端，由 M4 管理员在代理用户菜单中创建）、"用户名 / 密码"（调用 `POST /api/sign-in` 并保存会话 cookie，收到 401 后重新登录）或"无"。
+   - 应用 ID、应用密钥、用户名、密码。
+   - 步骤动作字段：`binTask`（默认）发送 `rbkArgs: {"binTask": <动作>, ...参数}`；`operation` 发送 `rbkArgs: {"operation": <动作>, ...参数}`。脚本步骤始终使用 `operation: "Script"`。
+3. 点"保存配置"保存。"删除配置"删除当前显示的配置。
+
+应用密钥和密码只保存在本地、已被 git 忽略的 `settings.json` 中。界面、`/api/settings` 和 `/api/m4` 中显示为 `******`，日志中不会出现。字段保持 `******` 不变即沿用已保存的值。也可以使用环境变量 `ODT_M4_APP_ID`、`ODT_M4_APP_KEY`、`ODT_M4_USER`、`ODT_M4_PASSWORD`、`ODT_M4_SCENE`，它们用于填补配置中为空的字段。
+
+### 按步骤覆盖（模板步骤的 `args`）
+以下键由 M4 适配器读取，不会放进 `rbkArgs`：
+- `m4Mode`：`"binTask"` 或 `"operation"`，覆盖该步骤的"步骤动作字段"。
+- `m4BinTask`：代替动作名发送的库位任务名，例如 `"Load"`。
+- `forLoad` / `forUnload`：默认动作名含 "unload" 的步骤为 `forUnload: true`，含 "load" 的为 `forLoad: true`，其他步骤两者都为 false。可显式设置以覆盖。
+
+### M4 适配器的映射
+- RDS 运单 = M4 运单；RDS 动作块 = M4 步骤（步骤 `id` = 运单号 + 动作块后缀，与 RDS blockId 相同）；RDS `complete` = M4 `stepFixed`（封口）。
+- 普通下发：`POST /api/fleet/orders/create`，带全部步骤，`stepFixed: true`。指定车辆、机器人组分别对应 `expectedRobotNames` / `expectedRobotGroups`，label(可选) 对应 `externalId`。
+- 逐块下发：创建时只带第一个步骤且 `stepFixed: false`；上一个步骤 `Done` 后用 `POST /api/fleet/orders/add-steps` 追加下一个；最后用 `POST /api/fleet/orders/complete-order` 封口。
+- 状态通过 `GET /api/fleet/orders/query-order-detail` 按"轮询间隔（秒）"和"逐块轮询（秒）"轮询，与 RDS 相同（不使用回调）。状态以本工具的 RDS 风格名称显示：
+
+| M4 | 显示为 | 效果 |
+|---|---|---|
+| Done | FINISHED | 终态，停止追加 |
+| Cancelled | STOPPED | 终态，停止追加 |
+| 任何状态且 `fault: true` | FAILED | 仅暂停（警告），继续轮询和追加 |
+| ToBeAllocated / Allocated / Executing | TOBEDISPATCHED / CREATED / RUNNING | 正常 |
+| Pending | 未封口为 WAITING，否则 RUNNING | 正常 |
+| Cancelling、Withdrawing、未知状态 | 原样大写显示 | 非终态，继续轮询 |
+
+  查询出错（HTTP 错误、401/403、超时）以及 add-steps/complete-order 出错都只暂停，与 RDS 完全相同。只有 Done 和 Cancelled 才停止追加。
+- 机器人：`GET /api/fleet/robots/all-all?sceneId=`。站点与地图：`GET /api/fleet/scenes/schema/{sceneId}`，使用 `structure.areas[].mergedMap`（点位、路径、库位），未知字段会被忽略。站点的前置点取通过路径与其相连的最近 `LM` 点，库位列在其所在点位下。
+- "取消选中订单"和"取消全部未完成测试订单"使用 `POST /api/fleet/orders/cancel {sceneId, orderId}`。
+
+### 无真实 M4 时的测试
+`python tools/fake_m4.py --port 18090` 启动一个使用模拟数据的 M4 模拟服务器（场景 `scene-1`，应用 ID/密钥 `mock-app`/`mock-key`，登录 `mockuser`/`mockpass`）。运单号含 `fault` 的会故障一段时间后恢复；含 `qerr` 的查询会失败一段时间；含 `xcancel` 的在第一个步骤完成后被 M4 取消。

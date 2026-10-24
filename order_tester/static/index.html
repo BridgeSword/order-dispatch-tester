@@ -18,7 +18,16 @@
  <span id=cfgsum></span> <button onclick=generate() style="background:#cfc" data-i18n=gen.btn></button> <span id=genmsg2></span></div>
 <fieldset class=sub data-sub=conn><legend data-i18n=cfg.legend></legend><span data-i18n=cfg.base></span> <input id=base size=28 value="http://127.0.0.1:8088"> <span data-i18n=cfg.poll></span> <input id=poll type=number value=2>
  <span data-i18n=cfg.stuck></span> <input id=stuck type=number value=60> <span data-i18n=cfg.still></span> <input id=still type=number value=60>
- <button onclick=saveCfg() data-i18n=btn.save></button> <span class=dim id=adapterinfo></span> <span data-i18n=cfg.lang></span> <select id=langsel2 onchange=setLang(this.value)><option value=zh>中文</option><option value=en>English</option></select> <span id=info></span></fieldset>
+ <button onclick=saveCfg() data-i18n=btn.save></button> <span class=dim id=adapterinfo></span>
+ <div id=adbox><span data-i18n=cfg.adapterSel></span> <select id=adsel onchange=setAdapter(this.value)><option value=rds>RDS</option><option value=m4>M4</option></select> <small class=dim data-i18n=cfg.adapterHint></small>
+ <div id=m4box style="display:none;margin:4px 0;padding:4px;border:1px dashed #aaa"><b data-i18n=m4.title></b> <span data-i18n=m4.profile></span> <select id=m4prof onchange=m4Show(this.value)></select> <input id=m4name size=10 data-i18n-ph=m4.profileName>
+ <span data-i18n=m4.base></span> <input id=m4base size=26 placeholder="http://&lt;m4-host&gt;:&lt;port&gt;"> <span data-i18n=m4.scene></span> <input id=m4scene size=16> <select id=m4scenes onchange="if(this.value)$('m4scene').value=this.value"></select> <button onclick=m4Test() data-i18n=m4.btnTest></button><br>
+ <span data-i18n=m4.auth></span> <select id=m4auth><option value="" data-i18n=m4.authAuto></option><option value=appkey data-i18n=m4.authKey></option><option value=login data-i18n=m4.authLogin></option><option value=none data-i18n=m4.authNone></option></select>
+ <span data-i18n=m4.appId></span> <input id=m4appid size=12 autocomplete=off> <span data-i18n=m4.appKey></span> <input id=m4appkey type=password size=12 autocomplete=new-password>
+ <span data-i18n=m4.user></span> <input id=m4user size=10 autocomplete=off> <span data-i18n=m4.pass></span> <input id=m4pass type=password size=10 autocomplete=new-password>
+ <span data-i18n=m4.opMode></span> <select id=m4op><option value=binTask>binTask</option><option value=operation>operation</option></select>
+ <button onclick=m4Save() data-i18n=m4.btnSave></button> <button onclick=m4Del() data-i18n=m4.btnDel></button> <span id=m4msg></span><br><small class=dim data-i18n=m4.hint></small></div></div>
+ <span data-i18n=cfg.lang></span> <select id=langsel2 onchange=setLang(this.value)><option value=zh>中文</option><option value=en>English</option></select> <span id=info></span></fieldset>
 <fieldset class=sub data-sub=pool><legend data-i18n=st.legend></legend><button onclick=loadSt() data-i18n=st.load></button>
  <span data-i18n=st.search></span> <input id=q oninput=renderSt() size=12> <span data-i18n=st.type></span> <input id=tf oninput=renderSt() size=6 placeholder="AP/LM">
  <details><summary data-i18n=st.paste></summary><textarea id=paste rows=3 cols=40></textarea><button onclick=usePaste() data-i18n=btn.use></button></details>
