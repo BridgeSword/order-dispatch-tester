@@ -27,10 +27,15 @@ class DispatcherAdapter(object):
     name = "base"
     #: states after which an order is no longer polled. NOTE for RDS: FAILED is *not* terminal.
     terminal_states = frozenset()
+    #: True: the base URL follows the shared "base" field/setting (RDS). False: the adapter keeps its own (M4 profile).
+    base_from_settings = True
 
-    def __init__(self, base_url, log=None):
+    def __init__(self, base_url, log=None, opts=None):
         self.base = base_url
         self.log = log or (lambda kind, **kw: None)
+
+    def configure(self, opts):
+        """apply adapter-specific options (connection profile, auth ...). Default: nothing to configure."""
 
     # ---- orders
     def build_payload(self, order):

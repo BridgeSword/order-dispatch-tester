@@ -55,7 +55,8 @@ class H(BaseHTTPRequestHandler):
         if path == "/api/order":
             o = S["orders"].get(self.q().get("id", ""))
             return self.send({"ok": bool(o), "body": o and o.get("body")})
-        if path == "/api/settings": return self.send(C.load_settings())
+        if path == "/api/settings": return self.send(C.masked_settings())  # M4 secrets masked
+        if path == "/api/m4": return self.send(dict(C.m4_masked(), adapter=C.AD().name, adapters=sorted(C.ADAPTERS)))
         if path == "/api/templates":
             st = S["store"]
             return self.send({"ok": True, "names": st.names(), "active": C.load_settings().get("activeTemplate") or "default",
@@ -91,9 +92,27 @@ class H(BaseHTTPRequestHandler):
             if fp and not os.path.isfile(fp): return self.send({"ok": False, "err": C.msg("srv.noFile", path=fp)})
             C.save_settings({"smapPath": fp}); S["geom"] = None
             return self.send(C.build_geom())
+        if path == "/api/adapter":  # {"adapter": "rds"|"m4"}
+            name = b.get("adapter") or "rds"
+            if name not in C.ADAPTERS: return self.send({"ok": False, "err": "unknown adapter: %s" % name})
+            C.save_settings({"adapter": name}); ad = C.set_adapter(name)
+            C.log("adapter", name=name, base=ad.base); return self.send({"ok": True, "adapter": ad.name, "base": ad.base})
+        if path == "/api/m4":  # {"name", "profile": {...}, "activate": true, "delete": false}; secrets may be sent as ******
+            act = C.m4_save(b.get("name"), b.get("profile") or {}, b.get("activate", True), bool(b.get("delete")))
+            if C.AD().name == "m4": C.set_adapter("m4")
+            C.log("m4_profile", name=b.get("name"), active=act, delete=bool(b.get("delete")))
+            return self.send(dict(C.m4_masked(), ok=True))
+        if path == "/api/m4_test":  # read-only: GET /api/ping + /api/fleet/scenes/list with the given (unsaved) profile
+            from .adapters.m4 import M4Adapter, MASK
+            prof = C.m4_profile(b.get("name")); prof.update({k: v for k, v in (b.get("profile") or {}).items() if v != MASK})
+            if not prof.get("base"): return self.send({"ok": False, "err": C.msg("srv.m4NoBase")})
+            ad = M4Adapter(prof["base"], C.log, prof)
+            ok, info = ad.ping(); sc = ad.scenes() if ok else None
+            return self.send({"ok": ok, "auth": ad.auth_mode(), "ping": info if ok else str(info)[:200], "scenes": sc})
         if path == "/api/config":
             C.set_base(b.get("base")); S["cfg"]["pollSec"] = b.get("pollSec", S["cfg"].get("pollSec", 2))
             part = dict(b.get("settings") or {})
+            part.pop("m4", None); part.pop("adapter", None)  # only via /api/m4 and /api/adapter (never overwrite secrets with masks)
             if b.get("base"): part["base"] = b["base"]
             if b.get("pollSec"): part["pollSec"] = b["pollSec"]
             if b.get("lang") in i18n.LANGS: part["lang"] = b["lang"]
@@ -193,8 +212,8 @@ def main(argv=None):
     except Exception as e: print("migration error:", e, flush=True)
     st0 = C.load_settings()
     adapter = a.adapter or st0.get("adapter") or "rds"
-    if adapter != C.AD().name: C.S["adapter"] = C.get_adapter(adapter, C.AD().base, C.log)
     C.set_base(st0.get("base")); C.set_base(a.base)
+    if adapter != C.AD().name or adapter == "m4": C.set_adapter(adapter)
     if st0.get("pollSec"): S["cfg"]["pollSec"] = st0["pollSec"]
     f0 = st0.get("fields") if isinstance(st0.get("fields"), dict) else {}
     S["cfg"]["blockByBlock"] = bool(f0.get("bbb"))

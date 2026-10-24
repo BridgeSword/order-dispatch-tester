@@ -3,7 +3,7 @@
 All dispatcher I/O goes through ``S["adapter"]`` (see adapters/base.py)."""
 import datetime, io, json, math, os, random, sys, threading, time, uuid, zipfile
 from . import templates as T
-from .adapters import get_adapter
+from .adapters import get_adapter, ADAPTERS
 from .adapters import rds_scene
 from . import i18n
 
@@ -100,7 +100,60 @@ def log(kind, **kw):
     with lock, open(P["log"], "a", encoding="utf-8") as f: f.write(json.dumps(kw, ensure_ascii=False) + "\n")
 
 def set_base(url):
-    if url: AD().base = url
+    if url and getattr(AD(), "base_from_settings", True): AD().base = url
+
+# ---------------------------------------------------------------- adapter selection / M4 connection profiles
+# settings.json (gitignored): "adapter": "rds"|"m4", "m4": {"active": name, "profiles": {name: {base, sceneId, auth,
+# appId, appKey, username, password, opMode}}}. Secrets are masked in every API response and never logged.
+M4_FIELDS = ("base", "sceneId", "auth", "appId", "appKey", "username", "password", "opMode")
+def m4_settings():
+    m = load_settings().get("m4")
+    m = m if isinstance(m, dict) else {}
+    profs = m.get("profiles") if isinstance(m.get("profiles"), dict) else {}
+    return {"active": m.get("active") or (next(iter(profs)) if profs else "default"), "profiles": profs}
+
+def m4_profile(name=None):
+    m = m4_settings(); return dict(m["profiles"].get(name or m["active"]) or {})
+
+def m4_masked():
+    from .adapters.m4 import mask
+    m = m4_settings(); return {"active": m["active"], "profiles": {k: mask(v) for k, v in m["profiles"].items()}}
+
+def m4_save(name, prof, activate=True, delete=False):
+    """store one profile; a masked secret ('******') keeps the stored value"""
+    from .adapters.m4 import MASK, SECRET_KEYS
+    name = (name or "default").strip() or "default"
+    with lock:
+        m = m4_settings(); profs = dict(m["profiles"])
+        if delete:
+            profs.pop(name, None); act = m["active"] if m["active"] != name else (next(iter(profs)) if profs else "default")
+        else:
+            old = profs.get(name) or {}; new = {}
+            for k in M4_FIELDS:
+                v = (prof or {}).get(k, old.get(k, ""))
+                if k in SECRET_KEYS and v == MASK: v = old.get(k, "")
+                new[k] = v.strip() if isinstance(v, str) else v
+            profs[name] = new; act = name if activate else m["active"]
+        save_settings({"m4": {"active": act, "profiles": profs}})
+    return act
+
+def set_adapter(name):
+    """switch the active dispatcher adapter (rds default); M4 takes base/auth/sceneId from the active profile"""
+    name = name or "rds"
+    opts = m4_profile() if name == "m4" else None
+    cur = AD()
+    if cur is not None and cur.name == name:
+        if opts is not None: cur.configure(opts)
+        return cur
+    rds_base = load_settings().get("base") or (cur.base if cur is not None and getattr(cur, "base_from_settings", True) else "http://127.0.0.1:8088")
+    S["adapter"] = get_adapter(name, (opts or {}).get("base") or rds_base, log, opts)
+    S["geom"] = None; S["groups"] = []; S["robot_group"] = {}; S["prepoints"] = {}; S.pop("st_cache", None)
+    return S["adapter"]
+
+def masked_settings():
+    st = load_settings()
+    if isinstance(st.get("m4"), dict): st["m4"] = m4_masked()
+    return st
 
 # ---------------------------------------------------------------- scene
 def set_groups(js):
