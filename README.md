@@ -30,7 +30,7 @@ other systems (e.g. VDA 5050) can be added as adapters later.
 - **Stuck detection**: an order is "possibly stuck" when it has a vehicle and nothing changed for N seconds.
   `FAILED` is *not* terminal (RDS can resume), unassigned orders are not counted, vehicle movement
   > 5 cm or > 2° counts as a change.
-- **Map** (routes, point cloud from the scene, `/downloadScene` or an uploaded `.smap`), **robots** by group.
+- **Map** (routes and point cloud from the dispatcher scene / `/downloadScene`; no manual `.smap` upload), **robots** by group.
 - **Chinese / English UI**, switchable (top-right), persisted; Chinese by default.
 
 ## Run

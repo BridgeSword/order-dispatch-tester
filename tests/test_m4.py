@@ -43,19 +43,42 @@ class AdapterTest(Base):
         self.assertEqual(b["sceneId"], fake_m4.SCENE_ID); self.assertIs(b["stepFixed"], True)
         self.assertEqual([s["id"] for s in b["steps"]], ["m4-pay1" + (s.get("blockSuffix") or "-" + s["id"]) for s in self.t["steps"] if s.get("enabled", True)])
         load = [s for s in b["steps"] if s.get("rbkArgs", {}).get("binTask") == "ForkLoad"][0]
+        self.assertEqual(load["rbkArgs"], {"binTask": "ForkLoad"})  # binTask: name only, no merged args
         self.assertTrue(load["forLoad"]); self.assertFalse(load["forUnload"])
         unl = [s for s in b["steps"] if s.get("rbkArgs", {}).get("binTask") == "ForkUnload"][0]
+        self.assertEqual(unl["rbkArgs"], {"binTask": "ForkUnload"})
         self.assertTrue(unl["forUnload"]); self.assertFalse(unl["forLoad"])
         scr = [s for s in b["steps"] if s.get("rbkArgs", {}).get("operation") == "Script"][0]
         self.assertIn("script_name", scr["rbkArgs"])
         ad = C.AD()
+        # legacy args.m4Mode still works
         st = {"id": "x", "suffix": "-x", "location": "AP1", "operation": "ForkLoad", "args": {"m4Mode": "operation", "end_height": 0.1}}
         s = ad.build_step({"id": "o"}, st)
         self.assertEqual(s["rbkArgs"], {"operation": "ForkLoad", "end_height": 0.1}); self.assertTrue(s["forLoad"])
-        s = ad.build_step({"id": "o"}, dict(st, args={"m4BinTask": "Load", "forLoad": False}))
+        # step.opMode preferred; binTask ignores ordinary args
+        s = ad.build_step({"id": "o"}, {"id": "x", "suffix": "-x", "location": "AP1", "operation": "ForkLoad",
+                                       "opMode": "binTask", "args": {"end_height": 0.1, "m4BinTask": "Load", "forLoad": False}})
         self.assertEqual(s["rbkArgs"], {"binTask": "Load"}); self.assertFalse(s["forLoad"])
+        s = ad.build_step({"id": "o"}, {"id": "x", "suffix": "-x", "location": "AP1", "operation": "ForkLoad",
+                                       "opMode": "operation", "args": {"end_height": 0.2}})
+        self.assertEqual(s["rbkArgs"], {"operation": "ForkLoad", "end_height": 0.2})
+        # profile opMode fallback when step has neither opMode nor m4Mode
         ad.configure(dict(C.m4_profile(), opMode="operation"))
         self.assertEqual(ad.build_step({"id": "o"}, dict(st, args={}))["rbkArgs"], {"operation": "ForkLoad"})
+
+    def test_mixed_opmode_in_one_order(self):
+        ad = C.AD()
+        steps = [
+            {"id": "a", "suffix": "-a", "location": "AP1", "operation": "ForkLoad", "opMode": "binTask", "args": {"end_height": 0.1}},
+            {"id": "b", "suffix": "-b", "location": "AP2", "operation": "ForkUnload", "opMode": "operation", "args": {"end_height": 0.09}},
+            {"id": "c", "suffix": "-c", "location": "LM2", "operation": "Script", "opMode": "binTask",
+             "args": {"script_name": "s.py", "script_args": {"x": 1}}},
+        ]
+        body = ad.build_payload({"id": "mix1", "steps": steps, "priority": 1})
+        self.assertEqual(body["steps"][0]["rbkArgs"], {"binTask": "ForkLoad"})
+        self.assertEqual(body["steps"][1]["rbkArgs"], {"operation": "ForkUnload", "end_height": 0.09})
+        self.assertEqual(body["steps"][2]["rbkArgs"]["operation"], "Script")
+        self.assertEqual(body["steps"][2]["rbkArgs"]["script_name"], "s.py")
 
     def test_auth_appkey_login_and_401(self):
         ad = C.AD(); self.assertEqual(ad.auth_mode(), "appkey"); self.assertTrue(ad.ping()[0])
@@ -93,15 +116,54 @@ class AdapterTest(Base):
     def test_scene_parsing_tolerant(self):
         st, js, _ = C.AD().scene(); self.assertEqual(st, 200)
         s = {x["name"]: x for x in C.AD().parse_stations(js)}
-        self.assertEqual(len(s), 12); self.assertNotIn("AP99", s)  # disabled area skipped
+        self.assertEqual(len(s), 24); self.assertNotIn("AP99", s)  # LM+AP; disabled area skipped
+        self.assertIn("LM3", s); self.assertEqual(s["LM3"]["pre"], "")  # LMs are selectable map stations
         self.assertEqual(s["AP3"]["pre"], "LM3"); self.assertEqual(s["AP3"]["bins"], ["BIN-3"]); self.assertIn("dir", s["AP1"])
         self.assertEqual(C.AD().parse_groups(js), [{"name": "grpA", "robots": ["AMB-01", "AMB-02"]}])
-        curves, pts = C.AD().extract_geom(js); self.assertEqual(len(curves), 12); self.assertEqual(len(pts), 24)
+        curves, pts = C.AD().extract_geom(js)
+        self.assertEqual(len(curves), 12)
+        self.assertEqual(len(pts), 200)  # normalPosList, not station dots
+        # Bezier / DegenerateBezier paths tessellate to >2 vertices; Straight stay 2-point
+        by_n = {c["n"]: c for c in curves}
+        self.assertGreater(len(by_n["LM1-AP1"]["p"]), 2, by_n["LM1-AP1"])
+        self.assertGreater(len(by_n["LM3-AP3"]["p"]), 2, by_n["LM3-AP3"])
+        self.assertEqual(len(by_n["LM5-AP5"]["p"]), 2)
+        self.assertIn("Bezier", by_n["LM1-AP1"]["c"])
         weird = {"structure": {"areas": [{"mergedMap": {"points": [{"instanceName": "AP1", "pos": {"x": "1", "y": 2}}, {"id": "LM1", "x": 0, "y": 0}, "junk", 5],
                                                          "paths": [{"from": {"name": "LM1"}, "to": "AP1"}, {}], "bins": [{"id": "B", "point": "AP1"}, None]}}, "bad"]}}
-        w = C.AD().parse_stations(weird); self.assertEqual(w[0]["name"], "AP1"); self.assertEqual(w[0]["pre"], "LM1"); self.assertEqual(w[0]["bins"], ["B"])
+        w = {x["name"]: x for x in C.AD().parse_stations(weird)}
+        self.assertEqual(w["AP1"]["pre"], "LM1"); self.assertEqual(w["AP1"]["bins"], ["B"]); self.assertIn("LM1", w)
         self.assertEqual(C.AD().parse_stations({}), []); self.assertEqual(C.AD().parse_groups({"structure": None}), [])
         stations, err = C.load_scene_stations(); self.assertEqual(err, ""); self.assertEqual(C.S["prepoints"]["AP5"], "LM5")
+
+    def test_m4_geom_via_build_geom(self):
+        """Scene load yields non-empty downsampled point cloud + typed curves without manual smap."""
+        g = C.build_geom(refresh=True)
+        self.assertTrue(g.get("ok"), g); self.assertEqual(g.get("sceneErr"), "")
+        self.assertGreater(g["npoints"], 0); self.assertEqual(len(g["curves"]), 12)
+        self.assertIn("normalPosList", g.get("pointSrc") or "")
+        self.assertTrue(any(len(c["p"]) > 2 for c in g["curves"]))
+
+    def test_m4_pointcloud_via_map_download(self):
+        """When schema has no normalPosList, download_maps (/scenes/{id}/download/{mapFile}) supplies the cloud."""
+        import io, zipfile
+        self.addCleanup(setattr, fake_m4, "SCHEMA_CLOUD", True)
+        self.addCleanup(setattr, fake_m4, "DOWNLOAD_MAP", b"")
+        fake_m4.SCHEMA_CLOUD = False
+        cloud = [{"x": (i % 10) * 0.5, "y": (i // 10) * 0.5} for i in range(400)]
+        bio = io.BytesIO()
+        with zipfile.ZipFile(bio, "w") as z:
+            z.writestr("0.smap", json.dumps({"normalPosList": cloud, "advancedPointList": [], "advancedCurveList": []}))
+        fake_m4.DOWNLOAD_MAP = bio.getvalue()
+        # schema without cloud -> extract_geom empty points, then map download
+        st, js, _ = C.AD().scene(); self.assertEqual(st, 200)
+        _, pts0 = C.AD().extract_geom(js); self.assertEqual(pts0, [])
+        code, raw = C.AD().download_maps(); self.assertEqual(code, 200); self.assertEqual(raw[:2], b"PK")
+        g = C.build_geom(refresh=True)
+        self.assertTrue(g.get("ok"), g); self.assertEqual(g.get("sceneErr"), "")
+        self.assertGreater(g["npoints"], 0, g.get("notes"))
+        self.assertIn("downloadScene", g.get("pointSrc") or "")
+        self.assertEqual(len(g["curves"]), 12)  # routes still from schema
 
     def test_robots_and_poll_done(self):
         rl = C.AD().robots(); self.assertEqual({r["name"] for r in rl}, {"AMB-01", "AMB-02"})

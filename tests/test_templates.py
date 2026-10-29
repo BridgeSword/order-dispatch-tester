@@ -65,8 +65,24 @@ class TemplateTest(unittest.TestCase):
         st = C.S["store"]; t = three_stage(); st.put(t)
         self.assertIn("three", st.names()); self.assertEqual(st.get("three")["steps"][1]["id"], "m")
         st.put(T.builtin_default()); st.delete("three"); self.assertEqual(st.names(), ["default"])
-        with self.assertRaises(ValueError): st.delete("default")
+        st.delete("default"); self.assertEqual(st.names(), [])  # empty store allowed (per-server)
+        with self.assertRaises(ValueError): st.delete("default")  # missing
         with self.assertRaises(ValueError): st.put({"name": "../evil", "steps": []})
+
+    def test_empty_step_name_ok(self):
+        t = three_stage(); t["steps"][0]["name"] = ""
+        self.assertEqual(T.validate(t), [])
+        self.assertEqual(t["steps"][0]["name"], "")
+
+    def test_store_rename(self):
+        st = C.S["store"]; st.put(T.builtin_default()); t = three_stage(); st.put(t)
+        r = st.rename("three", "three_renamed")
+        self.assertEqual(r["name"], "three_renamed")
+        self.assertIn("three_renamed", st.names()); self.assertNotIn("three", st.names())
+        with self.assertRaises(ValueError): st.rename("three_renamed", "default")  # exists, no overwrite
+        r = st.rename("three_renamed", "default", overwrite=True)
+        self.assertEqual(r["name"], "default"); self.assertEqual(st.names(), ["default"])
+        with self.assertRaises(ValueError): st.rename("default", "bad name")
 
     def test_example_templates_valid(self):
         import glob, os
@@ -89,6 +105,44 @@ class AdapterInterfaceTest(unittest.TestCase):
             self.assertTrue(callable(getattr(a, m)))
         with self.assertRaises(NotImplementedError): DispatcherAdapter("x").build_payload({})
         with self.assertRaises(ValueError): get_adapter("vda5050", "x")
+
+
+class OpModePayloadTest(unittest.TestCase):
+    """Per-step binTask|operation for RDS (and migration of legacy m4Mode)."""
+    def setUp(self): fresh_core(self); C.S["prepoints"] = dict(PREPOINTS)
+
+    def test_rds_bintask_omits_args_operation_keeps_args(self):
+        from order_tester.adapters.rds import RdsAdapter
+        ad = RdsAdapter("http://x")
+        order = {"id": "dl-om", "priority": 1, "steps": [
+            {"id": "a", "suffix": "-a", "location": "AP1", "operation": "ForkLoad", "opMode": "binTask",
+             "args": {"end_height": 0.1, "recognize": True}},
+            {"id": "b", "suffix": "-b", "location": "AP2", "operation": "ForkUnload", "opMode": "operation",
+             "args": {"end_height": 0.09}},
+            {"id": "c", "suffix": "-c", "location": "LM2", "operation": "Wait", "args": {"x": 1}},  # no opMode -> operation
+        ]}
+        bl = ad.build_payload(order)["blocks"]
+        self.assertEqual(bl[0]["operation"], "ForkLoad"); self.assertNotIn("operation_args", bl[0]); self.assertNotIn("recognize", bl[0])
+        self.assertEqual(bl[1]["operation_args"], {"end_height": 0.09})
+        self.assertEqual(bl[2]["operation_args"], {"x": 1})
+
+    def test_mixed_opmode_draft_and_m4mode_migrate(self):
+        t = {"name": "mixom", "steps": [
+            {"id": "a", "location": {"type": "pool", "pool": "start"}, "operation": "ForkLoad", "opMode": "binTask",
+             "args": {"end_height": 0.1}},
+            {"id": "b", "location": {"type": "pool", "pool": "end"}, "operation": "ForkUnload", "opMode": "operation",
+             "args": {"end_height": 0.09}},
+            {"id": "c", "location": {"type": "fixed", "station": "LM99"}, "operation": "Wait",
+             "args": {"m4Mode": "binTask", "ignored": 1}},
+        ]}
+        self.assertEqual(T.validate(t), [])
+        self.assertEqual(t["steps"][2]["opMode"], "binTask")
+        self.assertNotIn("m4Mode", t["steps"][2]["args"])
+        rec = C.make_draft({"start": "AP1", "end": "AP3"}, t, {}, "dl-mix")
+        bl = rec["body"]["blocks"]
+        self.assertEqual(bl[0]["operation"], "ForkLoad"); self.assertNotIn("operation_args", bl[0])
+        self.assertEqual(bl[1]["operation_args"], {"end_height": 0.09})
+        self.assertEqual(bl[2]["operation"], "Wait"); self.assertNotIn("operation_args", bl[2])
 
 if __name__ == "__main__": unittest.main()
 

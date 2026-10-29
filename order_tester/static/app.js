@@ -5,39 +5,59 @@ function t(k,v){let s=I18N[k];if(s==null)s=k;if(v)s=s.replace(/\{(\w+)\}/g,(m,n)
 function applyI18n(){document.documentElement.lang=LANG=='en'?'en':'zh';document.title=t('app.title');
  document.querySelectorAll('[data-i18n]').forEach(e=>e.textContent=t(e.dataset.i18n));
  document.querySelectorAll('[data-i18n-ph]').forEach(e=>e.placeholder=t(e.dataset.i18nPh));
- document.querySelectorAll('[data-i18n-title]').forEach(e=>e.title=t(e.dataset.i18nTitle));$('langsel').value=LANG;$('langsel2').value=LANG}
+ document.querySelectorAll('[data-i18n-title]').forEach(e=>e.title=t(e.dataset.i18nTitle));$('langsel').value=LANG;syncSrvToggleLabels()}
 async function loadI18n(){let want=null;try{want=localStorage.getItem('odtLang')}catch(e){}
- let r=await (await fetch('/api/i18n'+(want?'?lang='+want:''))).json();I18N=r.t;LANG=r.lang;applyI18n()}
+ let q=[];if(want)q.push('lang='+encodeURIComponent(want));q.push('_='+(Date.now()));let r=await (await fetch('/api/i18n?'+q.join('&'),{cache:'no-store'})).json();I18N=r.t;LANG=r.lang;applyI18n()}
 async function setLang(l){try{localStorage.setItem('odtLang',l)}catch(e){}await post('/api/config',{lang:l});location.reload()}
+async function loadVersion(){try{let r=await (await fetch('/api/version?_='+(Date.now()),{cache:'no-store'})).json();
+ let el=$('ver_footer');if(!el||!r||!r.ok)return;el.textContent='v'+(r.version||'?')+' · '+(r.buildDate||'')}catch(e){}}
 const stName=s=>s==DRAFT?t('state.draft'):s=='其它'?t('state.other'):s;
 // ---------------- state / settings ----------------
 let allSt=[],stMap={},stations=[],pools={start:[],end:[]},view={s:1,ox:0,oy:0},sel=new Set();
 const $=id=>document.getElementById(id);
 async function post(u,b){return (await fetch(u,{method:'POST',body:JSON.stringify(b)})).json()}
-const NOSAVE=new Set(['q','tf','paste','hidedone','smapf','f_veh','f_grp','f_st','f_id','f_stuck','newpool','tpl_raw','tpl_json','tpl_imp','tpl_title','langsel','swa','swb','tpl_sel','langsel2']);let loaded=false,saveT=null;
+const NOSAVE=new Set(['q','tf','paste','hidedone','f_veh','f_grp','f_st','f_id','f_stuck','newpool','tpl_raw','tpl_json','tpl_imp','tpl_title','tpl_name','langsel','swa','swb']);let loaded=false,saveT=null;
 function poolNames(){let n=Object.keys(pools);for(const r of (cur&&cur.pools)||[])if(!n.includes(r))n.push(r);return n}
-function collect(){let f={};document.querySelectorAll('input[id],select[id],textarea[id]').forEach(e=>{if(NOSAVE.has(e.id)||e.closest('#steps'))return;f[e.id]=e.type=='checkbox'?e.checked:e.value});
- let pm=document.querySelector('input[name=pm]:checked');
- return {base:$('base').value,pollSec:+$('poll').value,fields:f,pm:pm?pm.value:'start',pools,starts:pools.start||[],ends:pools.end||[],activeTemplate:cur?cur.name:'default',strategy:$('strategy').value}}
+let currentServerId=null,serverList=[];
+function collect(){let f={};document.querySelectorAll('input[id],select[id],textarea[id]').forEach(e=>{if(NOSAVE.has(e.id)||e.closest('#steps')||e.closest('#srv_side'))return;f[e.id]=e.type=='checkbox'?e.checked:e.value});
+ let pm=$('pm');
+ return {base:$('base').value,pollSec:+$('poll').value,fields:f,pm:pm&&pm.value?pm.value:'start',pools,starts:pools.start||[],ends:pools.end||[],activeTemplate:cur?cur.name:'',strategy:$('strategy').value,currentServerId:currentServerId,adapter:($('adsel')&&$('adsel').value)||'rds'}}
 let pmSaved='start';
 function applySettings(st){if(!st||typeof st!='object')return;let f=st.fields||{};
- if(st.base&&f.base==null)f.base=st.base;if(st.pollSec&&f.poll==null)f.poll=st.pollSec;
+ if(st.currentServerId)currentServerId=st.currentServerId;if(Array.isArray(st.servers))serverList=st.servers;
+ if(f.base==null&&'base' in st)f.base=st.base||'';if(st.pollSec&&f.poll==null)f.poll=st.pollSec;
+ if($('base')&&'base' in st&&(st.base==null||st.base===''))$('base').value='';
+ if(st.adapter&&$('adsel')){$('adsel').value=st.adapter;$('m4box').style.display=st.adapter==='m4'?'':'none'}
  if(f.grp)fillGroups(null,f.grp);
  for(const[k,v]of Object.entries(f)){let e=$(k);if(!e||NOSAVE.has(k))continue;if(e.type=='checkbox')e.checked=!!v;else if(v!=null)e.value=v}
  if(st.pools&&typeof st.pools=='object')pools=JSON.parse(JSON.stringify(st.pools));else pools={start:Array.isArray(st.starts)?st.starts:[],end:Array.isArray(st.ends)?st.ends:[]};
- if(st.strategy)$('strategy').value=st.strategy;pmSaved=st.pm=='S'?'start':st.pm=='E'?'end':(st.pm||'start')}
-function saveNow(){if(!loaded)return;let st=collect();try{localStorage.setItem('odtSettings',JSON.stringify(st))}catch(e){}
- return post('/api/config',{base:st.base,pollSec:st.pollSec,settings:st}).catch(()=>{})}
+ if(st.strategy)$('strategy').value=st.strategy;pmSaved=st.pm=='S'?'start':st.pm=='E'?'end':(st.pm||'start');
+ renderSrvList()}
+function isM4(){return ($('adsel')&&$('adsel').value)==='m4'}
+function m4ActiveName(){return (M4P&&M4P.active)||'default'}
+function persistDispatcherUrl(){let url=$('base').value.trim();
+ if(isM4()){let p=m4Form();if(url)p.base=url;return post('/api/m4',{name:m4ActiveName(),profile:p}).then(async r=>{if(r&&r.ok){M4P=r;/* don't m4Fill — would reset focus/password */;await refreshServers()}if(r&&!r.ok)$('m4msg').textContent=(r&&r.err)||'?';return r})}
+ if(!url)return Promise.resolve();
+ return post('/api/config',{base:url,pollSec:+$('poll').value})}
+function lsKey(){return 'odtSettings:'+(currentServerId||'default')}
+function saveNow(){if(!loaded)return;let st=collect();try{localStorage.setItem(lsKey(),JSON.stringify(st));localStorage.setItem('odtSettings',JSON.stringify(st))}catch(e){}
+ let body={pollSec:st.pollSec,settings:st};if(!isM4()){body.base=st.base}else{if(body.settings)delete body.settings.base;persistDispatcherUrl()}
+ return post('/api/config',body).catch(()=>{})}
 function saveLater(){if(!loaded)return;clearTimeout(saveT);saveT=setTimeout(saveNow,600)}
 async function initSettings(){let st=null,fromLocal=false;try{st=await (await fetch('/api/settings')).json()}catch(e){}
  if(!st||!Object.keys(st).length){try{st=JSON.parse(localStorage.getItem('odtSettings')||'null');fromLocal=!!st}catch(e){}}
  applySettings(st);await loadTemplates(st&&st.activeTemplate);loaded=true;renderPool();renderSt();showTab($('tab').value||'cfg');$('geominfo').textContent=t('map.needScene');let cached=false;try{let r=await (await fetch('/api/scene_geom?cached=1')).json();if(r.ok&&!r.sceneErr&&r.stations&&r.stations.length){setScene(r.stations);setGeom(r);cached=true;$('info').textContent=sceneAt()}}catch(e){}
  if(!cached&&poolNames().some(r=>(pools[r]||[]).length))ensureScene(true).then(ok=>{if(ok){$('info').textContent=t('msg.loadedScene',{n:allSt.length});renderPool();renderSt();prevLater()}});
- document.querySelectorAll('input,select,textarea').forEach(e=>{if(e.id&&NOSAVE.has(e.id))return;if(e.closest('#steps'))return;e.addEventListener('input',saveLater);e.addEventListener('change',saveLater)});
+ document.querySelectorAll('input,select,textarea').forEach(e=>{if(e.id&&NOSAVE.has(e.id))return;if(e.closest('#steps')||e.closest('#srv_side'))return;e.addEventListener('input',saveLater);e.addEventListener('change',saveLater)});
  ['grp','veh','pri','label'].forEach(i=>{$(i).addEventListener('input',prevLater);$(i).addEventListener('change',prevLater)});
  $('info').textContent=[st&&Object.keys(st).length?(fromLocal?t('msg.fromLocal'):t('msg.loaded')):'',sceneAt()].filter(Boolean).join(' · ');if(fromLocal)saveNow()}
-function saveCfg(){if(!loaded)return post('/api/config',{base:$('base').value,pollSec:+$('poll').value});let st=collect();try{localStorage.setItem('odtSettings',JSON.stringify(st))}catch(e){}
- return post('/api/config',{base:st.base,pollSec:st.pollSec,settings:st})}
+async function saveCfg(){let st=collect();try{localStorage.setItem(lsKey(),JSON.stringify(st));localStorage.setItem('odtSettings',JSON.stringify(st))}catch(e){}
+ let body={pollSec:st.pollSec,settings:Object.assign({},st)};if(isM4()){delete body.settings.base;await persistDispatcherUrl()}else body.base=st.base;
+ // also persist adapter into current server bucket
+ if(st.adapter)body.settings.adapter=st.adapter;
+ let r=await post('/api/config',body);if(r&&!r.ok){let msg=$('m4msg')||$('adapterinfo');if(msg)msg.textContent=(r.err||'?')}
+ // refresh list labels (base may have changed)
+ await refreshServers();return r}
 async function loadSt(){saveCfg();let ok=await loadScene(true,false);if(!ok)return;stations=allSt.slice();$('info').textContent=sceneAt();fitAll();renderSt();renderPool();prevLater()}
 function setScene(list){allSt=list||[];stMap={};for(const s of allSt)stMap[s.name]=s}
 let busyN=0;function busy(on){busyN=Math.max(0,busyN+(on?1:-1));const o=$('busy');if(!o)return;if(busyN){$('busytxt').textContent=t('busy.scene');o.classList.add('on');if(document.activeElement)document.activeElement.blur()}else{o.classList.remove('on','prog');$('busystage').textContent='';$('busyfill').style.width='0'}}
@@ -70,7 +90,7 @@ function preOvParse(){/* same rules as server parse_pre_text: STATION=PRE or STA
 function preOv(){let r=preOvParse().m,o={};for(const k in r)o[k]=r[k][0];return o}
 function preAll(n){/* every candidate pre-point (manual list, else scene list); [0] = default */let m=preOvParse().m[n];if(m&&m.length)return m;let s=stMap[n]||stations.find(x=>x.name==n)||{};let c=(s.preInfo||[]).map(x=>x.name);if(!c.length&&s.preCands)c=s.preCands;if(!c.length&&s.pre)c=[s.pre];return c}
 function preOf(n){let o=preOv();/* default (nearest) pre-point */if(o[n])return o[n];let s=stMap[n]||stations.find(x=>x.name==n);return s&&s.pre||''}
-function pmRole(){let r=document.querySelector('input[name=pm]:checked');return r?r.value:pmSaved}
+function pmRole(){let r=$('pm');return r&&r.value?r.value:pmSaved}
 function pick(n,role){role=role||pmRole();let a=pools[role]||(pools[role]=[]);let i=a.indexOf(n);i>=0?a.splice(i,1):a.push(n);renderPool();renderSt();prevLater()}
 // incremental table rows (keeps scroll / selection / open JSON boxes)
 function syncRows(tb,items){let ex=new Map();for(const tr of [...tb.rows])if(tr.dataset.k)ex.set(tr.dataset.k,tr);
@@ -111,8 +131,9 @@ function renderPools(){let pn=poolNames(),used=(cur&&cur.pools)||[];
  $('pools').innerHTML=pn.map(r=>`<div class=poolrow><span class=pn style="color:${pcol(r)}">${esc(plab(r))}</span> <span class=dim>(${(pools[r]||[]).length})</span>${used.includes(r)?'':` <span class=dim>${t('pool.unused')}</span>`}: <span class=chips data-r="${esc(r)}">${chips(pools[r]||[],r)}</span> <button onclick="clearPool('${r}')">${t('btn.clear')}</button>${r=='start'||r=='end'?'':` <button onclick="renamePool('${r}')">${t('pool.rename')}</button> <button onclick="delPool('${r}')">${t('pool.del')}</button>`}</div>`).join('');
  document.querySelectorAll('#pools .chips').forEach(e=>e.onclick=chipClick);
  for(const s of ['swa','swb']){let e=$(s),v=e.value;e.innerHTML=pn.map(r=>`<option value="${esc(r)}">${esc(plab(r))}</option>`).join('');e.value=pn.includes(v)?v:(s=='swa'?pn[0]:pn[1]||pn[0])}
- let pm=pmRole();$('pm_box').innerHTML=pn.map(r=>`<label><input type=radio name=pm value="${esc(r)}" ${r==pm?'checked':''} onchange=saveLater()>${t('map.pickFor',{p:esc(plab(r))})}</label>`).join('');
- if(!document.querySelector('input[name=pm]:checked')&&pn.length)document.querySelector('input[name=pm]').checked=true}
+ let pm=pmRole();
+ $('pm_box').innerHTML=`<select id=pm onchange=saveLater()>`+pn.map(r=>`<option value="${esc(r)}" ${r==pm?'selected':''}>${esc(plab(r))}</option>`).join('')+`</select>`;
+ if($('pm')&&pn.length&&!pn.includes($('pm').value))$('pm').value=pn[0]}
 function clearPool(r){pools[r]=[];renderPool();renderSt();saveNow();prevLater()}
 function delPool(r){if(!confirm(t('pool.delQ',{p:r})))return;delete pools[r];renderPool();renderSt();refreshStepPools();saveNow()}
 function renamePool(r){let n=prompt(t('pool.renameQ',{p:r}),r);if(n==null)return;n=n.trim();if(n==r)return;if(!/^[A-Za-z_][\w]*$/.test(n)){alert(t('pool.badName'));return}if(pools[n]){alert(t('pool.exists',{p:n}));return}
@@ -142,10 +163,19 @@ function renderSum(){if(!cur)return;let roles=cur.pools||[];$('cfgsum').innerHTM
 // ---------------- template editor ----------------
 let TPL={},cur=null,tplT=null,prevT=null,dirty=false;
 async function loadTemplates(active){let r=await (await fetch('/api/templates')).json();TPL=r.templates||{};$('adapterinfo').textContent=t('cfg.adapter')+': '+r.adapter;
- let names=Object.keys(TPL);active=active&&TPL[active]?active:(TPL[r.active]?r.active:names[0]);fillTplSel(active);setCur(TPL[active]||r.builtin)}
-function fillTplSel(v){$('tpl_sel').innerHTML=Object.keys(TPL).sort().map(n=>`<option value="${esc(n)}">${esc(n)}</option>`).join('');$('tpl_sel').value=v}
-function setCur(tp){cur=JSON.parse(JSON.stringify(tp));dirty=false;$('tpl_title').value=cur.title||'';renderSteps();if($('tpl_raw').checked)$('tpl_json').value=JSON.stringify(cur,null,1);tplStatus('');if(loaded)renderPool();prevLater()}
-function selectTpl(n){if(!TPL[n])return;if(dirty)saveTpl();setCur(TPL[n]);saveNow()}
+ let names=Object.keys(TPL);if(!names.length){cur=null;dirty=false;fillTplList('');if($('tpl_name'))$('tpl_name').value='';if($('tpl_title'))$('tpl_title').value='';
+  if($('steps')&&$('steps').tBodies[0])$('steps').tBodies[0].innerHTML='';if($('tpl_json'))$('tpl_json').value='';tplStatus(t('tpl.emptyHint'));if(loaded)renderPool();return}
+ active=active&&TPL[active]?active:(TPL[r.active]?r.active:names[0]);setCur(TPL[active])}
+function fillTplList(v){let ul=$('tpl_list');if(!ul)return;ul.innerHTML=Object.keys(TPL).sort().map(n=>`<li class="${n===v?'on':''}" onclick="selectTpl('${esc(n)}')">${esc(n)}</li>`).join('')}
+function setCur(tp){cur=JSON.parse(JSON.stringify(tp));dirty=false;if($('tpl_name'))$('tpl_name').value=cur.name||'';$('tpl_title').value=cur.title||'';renderSteps();if($('tpl_raw').checked)$('tpl_json').value=JSON.stringify(cur,null,1);tplStatus('');fillTplList(cur.name);if(loaded)renderPool();prevLater()}
+function selectTpl(n){if(!TPL[n]||(cur&&n===cur.name))return;if(dirty)saveTpl();setCur(TPL[n]);saveNow()}
+async function renameTpl(){if(!cur||!$('tpl_name')){if($('tpl_name'))$('tpl_name').value='';return}let n=($('tpl_name').value||'').trim();if(!n||n===cur.name){$('tpl_name').value=cur.name||'';return}
+ if(!/^[A-Za-z0-9_.\-\u4e00-\u9fff]{1,64}$/.test(n)){alert(t('tpl.badName'));$('tpl_name').value=cur.name;return}
+ let ow=!!TPL[n];if(ow&&!confirm(t('tpl.overwriteQ',{n}))){$('tpl_name').value=cur.name;return}
+ if(dirty&&!(await saveTpl())){$('tpl_name').value=cur.name;return}
+ let old=cur.name,r=await post('/api/template_rename',{old:old,new:n,overwrite:ow,activate:true});
+ if(!r.ok){alert(r.err||t('tpl.saveErr'));$('tpl_name').value=old;return}
+ delete TPL[old];cur.name=n;TPL[n]=r.template||Object.assign({},cur,{name:n});setCur(TPL[n]);saveNow()}
 function tplStatus(s,cls){$('tpl_status').innerHTML=s?`<span class=${cls||'dim'}>${s}</span>`:''}
 function tplChanged(){dirty=true;cur.pools=locPools();tplStatus(t('tpl.unsaved'));clearTimeout(tplT);tplT=setTimeout(saveTpl,700);renderPool();prevLater()}
 function locPools(){let S=cur.steps,u=new Set();for(const s of S){if(s.enabled===false||!s.location)continue;if(s.location.type=='pool'&&s.location.pool)u.add(s.location.pool);else if(s.location.type=='pre'){let r=stepRef(S,s.location.step),k=0;while(r&&r.location.type=='pre'&&k++<20)r=stepRef(S,r.location.step);if(r&&r.location.type=='pool'&&r.location.pool)u.add(r.location.pool)}}
@@ -153,50 +183,55 @@ function locPools(){let S=cur.steps,u=new Set();for(const s of S){if(s.enabled==
 async function saveTpl(){clearTimeout(tplT);cur.pools=locPools();let r=await post('/api/template_save',{template:cur,activate:true});
  if(!r.ok){tplStatus(t('tpl.saveErr')+': '+esc(r.err),'err');return false}TPL[cur.name]=r.template;cur.pools=r.template.pools;dirty=false;tplStatus(t('tpl.saved'),'ok');renderPools();return true}
 function askName(def){let n=prompt(t('tpl.namePrompt'),def||'');if(n==null)return null;n=n.trim();if(!/^[A-Za-z0-9_.\-\u4e00-\u9fff]{1,64}$/.test(n)){alert(t('tpl.badName'));return null}if(TPL[n]&&!confirm(t('tpl.overwriteQ',{n})))return null;return n}
-function newStep(id,name,loc){return {id,name,enabled:true,location:loc,operation:'Wait',args:{},vsOn:false,variableShape:{head:1.539,tail:1.539}}}
+function newStep(id,name,loc){return {id,name,enabled:true,location:loc,operation:'Wait',opMode:'binTask',args:{},vsOn:false,variableShape:{head:1.539,tail:1.539}}}
 async function newTpl(){let n=askName('my_template');if(!n)return;cur={name:n,title:'',version:1,pools:['start','end'],steps:[newStep('s',t('step.defPick'),{type:'pool',pool:'start'}),newStep('e',t('step.defDrop'),{type:'pool',pool:'end'})]};
- if(await saveTpl()){fillTplSel(n);setCur(TPL[n]);saveNow()}}
-async function copyTpl(){let n=askName(cur.name+'_copy');if(!n)return;cur=JSON.parse(JSON.stringify(cur));cur.name=n;if(await saveTpl()){fillTplSel(n);setCur(TPL[n]);saveNow()}}
-async function delTpl(){if(Object.keys(TPL).length<=1){alert(t('tpl.lastOne'));return}if(!confirm(t('tpl.delQ',{n:cur.name})))return;let r=await post('/api/template_delete',{name:cur.name});if(!r.ok){alert(r.err);return}
- delete TPL[cur.name];let n=Object.keys(TPL).sort()[0];fillTplSel(n);setCur(TPL[n]);saveNow()}
-function exportTpl(){let a=document.createElement('a');a.href=URL.createObjectURL(new Blob([JSON.stringify(cur,null,1)],{type:'application/json'}));a.download=cur.name+'.json';document.body.appendChild(a);a.click();a.remove()}
+ if(await saveTpl()){setCur(TPL[n]);saveNow()}}
+async function copyTpl(){if(!cur){alert(t('tpl.emptyHint'));return}let n=askName(cur.name+'_copy');if(!n)return;cur=JSON.parse(JSON.stringify(cur));cur.name=n;if(await saveTpl()){setCur(TPL[n]);saveNow()}}
+async function delTpl(){if(!cur){alert(t('tpl.emptyHint'));return}if(!confirm(t('tpl.delQ',{n:cur.name})))return;let r=await post('/api/template_delete',{name:cur.name});if(!r.ok){alert(r.err);return}
+ delete TPL[cur.name];let names=Object.keys(TPL).sort();if(!names.length){cur=null;dirty=false;fillTplList('');if($('tpl_name'))$('tpl_name').value='';if($('tpl_title'))$('tpl_title').value='';
+  if($('steps')&&$('steps').tBodies[0])$('steps').tBodies[0].innerHTML='';tplStatus(t('tpl.emptyHint'));saveNow();return}
+ setCur(TPL[names[0]]);saveNow()}
+function exportTpl(){if(!cur){alert(t('tpl.emptyHint'));return}let a=document.createElement('a');a.href=URL.createObjectURL(new Blob([JSON.stringify(cur,null,1)],{type:'application/json'}));a.download=cur.name+'.json';document.body.appendChild(a);a.click();a.remove()}
 async function importTpl(){let f=$('tpl_imp').files[0];if(!f)return;let tp;try{tp=JSON.parse(await f.text())}catch(e){alert(t('tpl.badJson')+': '+e.message);return}finally{$('tpl_imp').value=''}
  await importTplObj(tp,f.name)}
 async function importTplObj(tp,fname){let n=askName(tp.name||String(fname||'imported').replace(/\.json$/i,''));if(!n)return false;tp.name=n;let v=await post('/api/template_validate',{template:tp});if(!v.ok){alert(t('tpl.invalid')+':\n'+v.errors.join('\n'));return false}
- cur=v.template;if(await saveTpl()){fillTplSel(n);setCur(TPL[n]);saveNow();return true}return false}
+ cur=v.template;if(await saveTpl()){setCur(TPL[n]);saveNow();return true}return false}
 function toggleRaw(){let raw=$('tpl_raw').checked;if(raw)$('tpl_json').value=JSON.stringify(cur,null,1);else renderSteps();$('tpl_form').style.display=raw?'none':'';$('tpl_rawbox').style.display=raw?'':'none'}
 function rawChanged(){let v;try{v=JSON.parse($('tpl_json').value)}catch(e){tplStatus(t('tpl.badJson')+': '+esc(e.message),'err');return}
  if(!v||typeof v!='object'||!Array.isArray(v.steps)||v.steps.some(s=>!s||typeof s!='object'||!s.location)){tplStatus(t('tpl.invalid'),'err');return}v.name=cur.name;cur=v;$('tpl_title').value=cur.title||'';tplChanged()}
 const OPS=['Wait','ForkLoad','ForkUnload','ForkHeight','Script','JackLoad','JackUnload','none'];
-function locCell(s,i){let L=s.location,ty=L.type,pn=poolNames(),opts=cur.steps.map((x,j)=>j==i?'':`<option value="${esc(x.id)}" ${L.step==x.id?'selected':''}>${j+1}. ${esc(x.name||x.id)}</option>`).join('');
- return `<select class=loctype onchange="setLoc(${i},'type',this.value)">${['pool','pre','fixed'].map(x=>`<option value=${x} ${ty==x?'selected':''}>${t('loc.'+x)}</option>`).join('')}</select><br>`+
- (ty=='pool'?poolSelect(L.pool,i):
-  ty=='pre'?`<select class=locstep onchange="setLoc(${i},'step',this.value)"><option value="">-</option>${opts}</select><br>`+selCell(L,i):`<input class=locfixed size=10 value="${esc(L.station||'')}" placeholder="LM1" onchange="setLoc(${i},'station',this.value)">`)}
+function locCell(s,i,dis){dis=dis||'';let L=s.location,ty=L.type,pn=poolNames(),opts=cur.steps.map((x,j)=>j==i?'':`<option value="${esc(x.id)}" ${L.step==x.id?'selected':''}>${j+1}. ${esc(x.name||x.id)}</option>`).join('');
+ return `<select class=loctype onchange="setLoc(${i},'type',this.value)" ${dis}>${['pool','pre','fixed'].map(x=>`<option value=${x} ${ty==x?'selected':''}>${t('loc.'+x)}</option>`).join('')}</select><br>`+
+ (ty=='pool'?poolSelect(L.pool,i,dis):
+  ty=='pre'?`<select class=locstep onchange="setLoc(${i},'step',this.value)" ${dis}><option value="">-</option>${opts}</select><br>`+selCell(L,i,dis):`<input class=locfixed size=10 value="${esc(L.station||'')}" placeholder="LM1" onchange="setLoc(${i},'station',this.value)" ${dis}>`)}
 const PSEL=['nearest','index','name','dir','random'];
-function selCell(L,i){let by=L.select||'nearest',arg=L.selArg==null?'':String(L.selArg);
- let h=`<select class=locsel title="${esc(t('sel.tip'))}" onchange="setLoc(${i},'select',this.value)">${PSEL.map(x=>`<option value=${x} ${by==x?'selected':''}>${t('sel.'+x)}</option>`).join('')}</select>`;
- if(by=='dir')h+=` <select class=locselarg onchange="setLoc(${i},'selArg',this.value)">${['in','out'].map(x=>`<option value=${x} ${arg==x?'selected':''}>${t('pre.dir.'+x)}</option>`).join('')}</select>`;
- else if(by=='index')h+=` <input class=locselarg type=number min=1 style=width:4em value="${esc(arg||'1')}" onchange="setLoc(${i},'selArg',this.value)">`;
- else if(by=='name')h+=` <input class=locselarg size=8 value="${esc(arg)}" placeholder="LM1*" onchange="setLoc(${i},'selArg',this.value)">`;
+function selCell(L,i,dis){dis=dis||'';let by=L.select||'nearest',arg=L.selArg==null?'':String(L.selArg);
+ let h=`<select class=locsel title="${esc(t('sel.tip'))}" onchange="setLoc(${i},'select',this.value)" ${dis}>${PSEL.map(x=>`<option value=${x} ${by==x?'selected':''}>${t('sel.'+x)}</option>`).join('')}</select>`;
+ if(by=='dir')h+=` <select class=locselarg onchange="setLoc(${i},'selArg',this.value)" ${dis}>${['in','out'].map(x=>`<option value=${x} ${arg==x?'selected':''}>${t('pre.dir.'+x)}</option>`).join('')}</select>`;
+ else if(by=='index')h+=` <input class=locselarg type=number min=1 style=width:4em value="${esc(arg||'1')}" onchange="setLoc(${i},'selArg',this.value)" ${dis}>`;
+ else if(by=='name')h+=` <input class=locselarg size=8 value="${esc(arg)}" placeholder="LM1*" onchange="setLoc(${i},'selArg',this.value)" ${dis}>`;
  return h}
 // pool dropdown for a 'pool' step: every existing pool (display names) + the step's own value if it is not a pool yet.
 // (was <input list=datalist>: browsers filter datalist suggestions by the current value, so only 'start' was offered)
-function poolSelect(v,i){let pn=poolNames();if(v&&!pn.includes(v))pn=pn.concat([v]);
- return `<select class=locpool onchange="setLoc(${i},'pool',this.value)">${pn.map(r=>`<option value="${esc(r)}" ${r==v?'selected':''}>${esc(plab(r))}${r!='start'&&r!='end'||plab(r)==r?'':' ('+r+')'}</option>`).join('')}</select>`}
+function poolSelect(v,i,dis){dis=dis||'';let pn=poolNames();if(v&&!pn.includes(v))pn=pn.concat([v]);
+ return `<select class=locpool onchange="setLoc(${i},'pool',this.value)" ${dis}>${pn.map(r=>`<option value="${esc(r)}" ${r==v?'selected':''}>${esc(plab(r))}${r!='start'&&r!='end'||plab(r)==r?'':' ('+r+')'}</option>`).join('')}</select>`}
 // re-render the step table only when the pool list changed and no step control has focus (never clobber an open dropdown/input)
 let stepPoolSig='';function refreshStepPools(){let sig=poolNames().join('|');if(sig===stepPoolSig)return;
  let a=document.activeElement;if(a&&a.closest&&a.closest('#steps')){setTimeout(refreshStepPools,500);return}if(cur)renderSteps()}
-function renderSteps(){stepPoolSig=poolNames().join('|');let tb=$('steps').tBodies[0];tb.innerHTML='';cur.steps.forEach((s,i)=>{let tr=document.createElement('tr');tr.className=s.enabled===false?'off':'';tr.dataset.i=i;
- let vs=s.variableShape||{head:1.539,tail:1.539};
- tr.innerHTML=`<td><span class=hdl draggable=true title="${t('step.drag')}">☰</span><br><button class=up onclick=mvStep(${i},-1) ${i?'':'disabled'}>↑</button><button class=down onclick=mvStep(${i},1) ${i<cur.steps.length-1?'':'disabled'}>↓</button></td><td>${i+1}</td>
+function stepOpMode(s){if(s.opMode==='binTask'||s.opMode==='operation')return s.opMode;
+ let am=s.args&&s.args.m4Mode;if(am==='binTask'||am==='operation')return am;return isM4()?'binTask':'operation'}
+function renderSteps(){stepPoolSig=poolNames().join('|');let tb=$('steps').tBodies[0];tb.innerHTML='';let m4=isM4();$('steps').classList.toggle('no-vs',m4);
+ cur.steps.forEach((s,i)=>{let tr=document.createElement('tr');let om=stepOpMode(s);tr.className=(s.enabled===false?'off ':'')+(om==='binTask'?'om-bin':'om-op');tr.dataset.i=i;
+ let vs=s.variableShape||{head:1.539,tail:1.539};let dis=s.enabled===false?'disabled':'';
+ tr.innerHTML=`<td><div class=act><span class=hdl draggable=true title="${t('step.drag')}">☰</span><button class=up onclick=mvStep(${i},-1) ${dis||(i?'':'disabled')}>↑</button><button class=down onclick=mvStep(${i},1) ${dis||(i<cur.steps.length-1?'':'disabled')}>↓</button><button class=rm onclick=rmStep(${i}) title="${t('btn.del')}" ${dis}>✕</button></div></td><td>${i+1}</td>
  <td><input type=checkbox class=sten ${s.enabled===false?'':'checked'} onchange="setF(${i},'enabled',this.checked)"></td>
- <td><input class=stid size=6 value="${esc(s.id)}" onchange="setF(${i},'id',this.value.trim())"><br><span class=dim title="${t('step.suffixTip')}">${t('step.suffix')}</span><input size=8 value="${esc(s.blockSuffix||'')}" placeholder="-${esc(s.id)}" onchange="setF(${i},'blockSuffix',this.value.trim())"></td>
- <td><input class=stname size=9 value="${esc(s.name||'')}" onchange="setF(${i},'name',this.value)"></td><td>${locCell(s,i)}</td>
- <td><input class=stop list=dl_ops size=10 value="${esc(s.operation||'none')}" onfocus="this.placeholder=this.value;this.value=''" onblur="if(!this.value)this.value=this.placeholder" onchange="if(this.value.trim())setF(${i},'operation',this.value.trim())"></td>
- <td><textarea class=stargs rows=7 spellcheck=false onchange="setArgs(${i},this)">${esc(JSON.stringify(s.args||{},null,2))}</textarea><span class="err argerr"></span></td>
- <td><label><input type=checkbox class=stvs ${s.vsOn?'checked':''} onchange="setVs(${i},'on',this.checked)">${t('step.vsOn')}</label><br><input type=number step=0.001 value="${vs.head}" onchange="setVs(${i},'head',this.value)"> <input type=number step=0.001 value="${vs.tail}" onchange="setVs(${i},'tail',this.value)"></td>
- <td><button class=rm onclick=rmStep(${i}) title="${t('btn.del')}">✕</button></td>`;
- tr.querySelector('.hdl').addEventListener('dragstart',e=>{e.dataTransfer.setData('text/plain',String(i));e.dataTransfer.effectAllowed='move'});
+ <td><input class=stid size=6 value="${esc(s.id)}" onchange="setF(${i},'id',this.value.trim())" ${dis}></td>
+ <td><input class=stname size=9 value="${esc(s.name||'')}" onchange="setF(${i},'name',this.value)" ${dis}></td><td>${locCell(s,i,dis)}</td>
+ <td><select class=stom onchange="setOpMode(${i},this.value)" ${dis}><option value=binTask ${om==='binTask'?'selected':''}>binTask</option><option value=operation ${om==='operation'?'selected':''}>operation</option></select></td>
+ <td><input class=stop list=dl_ops size=12 value="${esc(s.operation||(om==='binTask'?'':'none'))}" ${om==='operation'?`onfocus="this.placeholder=this.value;this.value=''" onblur="if(!this.value)this.value=this.placeholder"`:''} ${dis} onchange="if(this.value.trim())setF(${i},'operation',this.value.trim())"></td>
+ <td class=stargs-td>${om==='binTask'?'':`<textarea class=stargs rows=7 spellcheck=false ${dis} onchange="setArgs(${i},this)">${esc(JSON.stringify(s.args||{},null,2))}</textarea><span class="err argerr"></span>`}</td>
+ <td class=vs-col><label><input type=checkbox class=stvs ${s.vsOn?'checked':''} ${dis} onchange="setVs(${i},'on',this.checked)">${t('step.vsOn')}</label><br><input type=number step=0.001 value="${vs.head}" ${dis} onchange="setVs(${i},'head',this.value)"> <input type=number step=0.001 value="${vs.tail}" ${dis} onchange="setVs(${i},'tail',this.value)"></td>`;
+ let hdl=tr.querySelector('.hdl');if(dis){hdl.removeAttribute('draggable');hdl.style.pointerEvents='none';hdl.style.opacity='.4'}else hdl.addEventListener('dragstart',e=>{e.dataTransfer.setData('text/plain',String(i));e.dataTransfer.effectAllowed='move'});
  tr.addEventListener('dragover',e=>{e.preventDefault();tr.classList.add('drag')});tr.addEventListener('dragleave',()=>tr.classList.remove('drag'));
  tr.addEventListener('drop',e=>{e.preventDefault();tr.classList.remove('drag');moveStep(parseInt(e.dataTransfer.getData('text/plain')),i)});tb.appendChild(tr)});
  if(!$('dl_ops')){let d=document.createElement('datalist');d.id='dl_ops';d.innerHTML=OPS.map(o=>`<option value="${o}">`).join('');document.body.appendChild(d)}}
@@ -204,6 +239,7 @@ function setF(i,k,v){let s=cur.steps[i];if(k=='id'){let old=s.id;if(!v||cur.step
  if(k=='blockSuffix'&&!v)delete s.blockSuffix;else s[k]=v;renderSteps();tplChanged()}
 function setLoc(i,k,v){let L=cur.steps[i].location;if(k=='type'){cur.steps[i].location=v=='pool'?{type:'pool',pool:poolNames()[0]||'start'}:v=='pre'?{type:'pre',step:(cur.steps.find((x,j)=>j!=i&&x.location.type=='pool')||{}).id||''}:{type:'fixed',station:''}}else if(k=='select'){if(v=='nearest'){delete L.select;delete L.selArg}else{L.select=v;L.selArg=v=='dir'?'in':v=='index'?'1':v=='name'?(L.selArg&&L.select=='name'?L.selArg:''):undefined;if(L.selArg===undefined)delete L.selArg}}else L[k]=v.trim();renderSteps();tplChanged()}
 function setArgs(i,ta){let v;try{v=JSON.parse(ta.value||'{}');if(!v||typeof v!='object'||Array.isArray(v))throw new Error(t('step.argsObj'))}catch(e){ta.nextElementSibling.textContent=e.message;return}ta.nextElementSibling.textContent='';cur.steps[i].args=v;tplChanged()}
+function setOpMode(i,v){let s=cur.steps[i];s.opMode=(v==='operation')?'operation':'binTask';if(s.args&&s.args.m4Mode){delete s.args.m4Mode}renderSteps();tplChanged()}
 function setVs(i,k,v){let s=cur.steps[i];s.variableShape=s.variableShape||{head:1.539,tail:1.539};if(k=='on')s.vsOn=v;else{let n=parseFloat(v);if(!isFinite(n)){alert(t('vs.num'));return}s.variableShape[k]=n}tplChanged()}
 function mvStep(i,d){moveStep(i,i+d)}
 function moveStep(a,b){if(a==b||isNaN(a)||b<0||b>=cur.steps.length)return;let [s]=cur.steps.splice(a,1);cur.steps.splice(b,0,s);renderSteps();tplChanged()}
@@ -216,9 +252,16 @@ async function doPreview(){if(!cur)return;let r;try{r=await post('/api/preview',
 // ---------------- map ----------------
 const C=$('map'),X=C.getContext('2d');let geom=null,pcOff=null,pcK=1;
 function showTab(tb){if(!['cfg','map','rob','ord'].includes(tb))tb='cfg';$('tab').value=tb;document.querySelectorAll('.tab').forEach(e=>e.classList.toggle('on',e.id=='tab-'+tb));
- document.querySelectorAll('#tabbar button').forEach(b=>b.classList.toggle('on',b.dataset.t==tb));saveLater();if(tb=='map'){let first=!C.dataset.sized;resizeMap();if(first)fitAll()}}
-function resizeMap(){if($('tab').value!='map')return;let top=C.getBoundingClientRect().top;C.width=Math.max(300,document.documentElement.clientWidth-16);C.height=Math.max(200,window.innerHeight-top-10);C.dataset.sized=1;draw()}
-window.addEventListener('resize',resizeMap);
+ document.querySelectorAll('#tabbar button').forEach(b=>b.classList.toggle('on',b.dataset.t==tb));saveLater();if(tb=='map'){let first=!C.dataset.sized;resizeMap();if(first)fitAll()}else{document.documentElement.classList.remove('map-fill');document.body.classList.remove('map-fill')}}
+function resizeMap(){
+ if($('tab').value!='map'){document.documentElement.classList.remove('map-fill');document.body.classList.remove('map-fill');return}
+ document.documentElement.classList.add('map-fill');document.body.classList.add('map-fill');
+ let box=C.parentElement,br=box.getBoundingClientRect(),tr=$('maptool').getBoundingClientRect();
+ let w=Math.max(300,Math.floor(br.width)),h=Math.max(200,Math.floor(br.bottom-tr.bottom-4));
+ if(C.width!==w||C.height!==h){C.width=w;C.height=h;C.dataset.sized=1;draw()}
+ else {C.dataset.sized=1}
+}
+window.addEventListener('resize',()=>{if($('tab').value=='map')resizeMap()});
 function setGeom(r){geom=r;if(r.stations&&r.stations.length){if(!allSt.length)setScene(r.stations);if(!stations.length){stations=r.stations;}
  else if(stations.some(s=>s.missing||s.x==null))stations=stations.map(s=>stMap[s.name]?{...stMap[s.name]}:{...s,missing:true});renderSt();renderPool();prevLater()}buildPC();$('geominfo').innerHTML=(r.loadedAt?esc(sceneAt().split(' · ')[0])+' · ':'')+t('map.geomInfo',{c:r.curves.length,cs:r.curveSrc?' ('+esc(r.curveSrc)+')':'',p:r.npoints,ps:r.pointSrc?' ('+esc(r.pointSrc)+')':''})+(r.notes&&r.notes.length?` <span style=color:#a60 title="${esc(r.notes.join('\n'))}">⚠${esc(r.notes[r.notes.length-1])}</span>`:'');
  if(!stations.filter(s=>s.x!=null).length||!C.dataset.fitted)fitAll();draw()}
@@ -258,7 +301,7 @@ function hoverSt(e){if(!$('ly_st').checked){C.title='';return}let best=null,bd=1
 function drawStations(){let pn=poolNames(),inP={},pre={};
  let alt={};for(const r of pn)for(const n of pools[r]||[]){(inP[n]=inP[n]||[]).push(r);preAll(n).forEach((p,i)=>{pre[p]=pre[p]||{};(pre[p][r]=pre[p][r]||[]).push(n);if(i)alt[p+'|'+n]=1})}
  for(const s of (allSt.length?allSt:stations)){if(s.x==null||inP[s.name]||pre[s.name])continue;
-  X.fillStyle=(s.type.includes('Action')||s.name.startsWith('AP'))?'#06c':'#999';X.beginPath();X.arc(tx(s.x),ty(s.y),3,0,7);X.fill();if(view.s>15){X.fillStyle='#333';X.fillText(s.name,tx(s.x)+4,ty(s.y)-4)}}
+  X.fillStyle=(s.type.includes('Action')||s.name.startsWith('AP'))?'#06c':'#999';X.beginPath();X.arc(tx(s.x),ty(s.y),3,0,7);X.fill();X.fillStyle='#333';X.fillText(s.name,tx(s.x)+4,ty(s.y)-4)}
  X.save();X.setLineDash([4,3]);X.lineWidth=1.2;
  for(const p in pre){let a=stPos(p);if(!a)continue;for(const r in pre[p])for(const n of pre[p][r]){let b=stPos(n);if(!b)continue;X.strokeStyle=pcol(r);X.globalAlpha=alt[p+'|'+n]?.3:.7;X.beginPath();X.moveTo(tx(a.x),ty(a.y));X.lineTo(tx(b.x),ty(b.y));X.stroke()}}
  X.restore();
@@ -277,9 +320,6 @@ let drag=null;C.onmousedown=e=>drag={x:e.offsetX,y:e.offsetY,m:0};C.onmousemove=
 C.onmouseup=e=>{if(drag&&!drag.m&&$('ly_st').checked){let best=null,bd=144;for(const s of (allSt.length?allSt:stations)){if(s.x==null)continue;let d=(tx(s.x)-e.offsetX)**2+(ty(s.y)-e.offsetY)**2;if(d<bd){bd=d;best=s}}if(best)pick(best.name)}drag=null};
 C.onmouseleave=()=>drag=null;
 C.onwheel=e=>{e.preventDefault();let f=e.deltaY<0?1.2:1/1.2;view.ox=e.offsetX-(e.offsetX-view.ox)*f;view.oy=e.offsetY-(e.offsetY-view.oy)*f;view.s*=f;draw()};
-async function uploadSmap(){let f=$('smapf').files[0];if(!f)return;$('geominfo').textContent=t('map.uploading',{f:f.name,mb:(f.size/1e6).toFixed(1)});
- let r=await (await fetch('/api/smap_upload?name='+encodeURIComponent(f.name),{method:'POST',body:f})).json();if(!r.ok){alert(r.err);$('geominfo').textContent=r.err;return}C.dataset.fitted='';setGeom(r)}
-async function useSmapPath(){$('geominfo').textContent=t('map.parsing');let r=await post('/api/smap_path',{path:$('smap_path').value});if(!r.ok){alert(r.err);$('geominfo').textContent=r.err;return}C.dataset.fitted='';setGeom(r)}
 // ---------------- generate / drafts ----------------
 function dispCfg(){return {base:$('base').value,vehicle:$('veh').value.trim(),group:$('grp').value,priority:+$('pri').value,label:$('label').value.trim(),preOverrides:preOvParse().m,preOverridesText:$('pre_ov').value}}
 function incTag(o){let c=o.inc;if(!c||typeof c!='object')return '';let col=c.status=='done'?'#2a7':c.status=='stopped'?'#c33':c.warn?'#e67e00':'#06c',tip=[t('inc.'+c.status),c.reason||'',c.warn||'',c.lastErr||'',c.resumed?t('inc.resumed'):''].filter(Boolean).join('\n');
@@ -387,7 +427,8 @@ async function tick(){try{let r=await (await fetch('/api/state')).json();if(r.gr
  const stkOf=o=>isAct(o)&&hasVeh(o)&&o.idle>T;
  const match=o=>{let st=o.state;if(fst.size&&!(fst.has(st)||(fst.has('其它')&&!FKNOWN.has(st))))return false;
   if(f.hide&&term.includes(o.state))return false;if(f.stuck&&!stkOf(o))return false;
-  if(f.veh&&!(o.vehicle||'').toLowerCase().includes(f.veh.toLowerCase()))return false;if(f.grp&&ogrp(o)!==f.grp)return false;
+  /* grp/veh: sent only; drafts without assigned group/vehicle stay visible */
+  if(f.veh&&(o.state!=DRAFT||(o.vehicle||''))&&!(o.vehicle||'').toLowerCase().includes(f.veh.toLowerCase()))return false;if(f.grp&&(o.state!=DRAFT||ogrp(o))&&ogrp(o)!==f.grp)return false;
   if(f.st&&!o.pairS.toLowerCase().includes(f.st.toLowerCase()))return false;if(f.id&&!o.id.toLowerCase().includes(f.id.toLowerCase()))return false;return true};
  let gm=new Map();for(const o of r.orders){let k=o.state==DRAFT?'drafts':(o.batch||'nobatch');if(!gm.has(k)){let m=o.batchMeta||{};
    gm.set(k,{k,name:batchName(k=='drafts'||k=='nobatch'?{}:m,k),meta:k=='drafts'||k=='nobatch'?{}:m,all:[],rows:[]})}
@@ -415,23 +456,100 @@ async function tick(){try{let r=await (await fetch('/api/state')).json();if(r.gr
   if(jsonOpen.has(o.id))items.push({k:'json:'+o.id,c:['',{h:`<pre class=jbox style="margin:0;max-height:300px;overflow:auto;background:#f6f6f6;font-size:11px">${esc(jsonCache[o.id]||t('msg.loading'))}</pre>`,span:14}]})}}
  syncRows(ordTable.tBodies[0],items);
  renderRobots(r,still);draw()}catch(e){console.error(e)}}
-loadI18n().then(()=>{initFilt();initSub();m4Load();return initSettings()}).finally(()=>{setInterval(tick,1500);tick()});
+loadI18n().then(async()=>{initFilt();initSub();initSrvSide();await loadVersion();await m4Load();await initSettings();if(isM4())m4Fill()}).finally(()=>{setInterval(tick,1500);tick()});
+
+
+// ---------------- dispatcher servers (per-server settings) ----------------
+function srvCollapsed(){return document.body.classList.contains('srv-collapsed')}
+function syncSrvToggleLabels(){let on=srvCollapsed(),edge=$('srv_edge');
+ if(edge){edge.textContent=on?'»':'«';edge.setAttribute('aria-expanded',on?'false':'true');edge.title=t(on?'srv.expand':'srv.collapse')}}
+function applySrvCollapsed(on){document.body.classList.toggle('srv-collapsed',!!on);
+ try{localStorage.setItem('odtSrvCollapsed',on?'1':'0')}catch(e){}
+ syncSrvToggleLabels();if($('tab')&&$('tab').value=='map')resizeMap()}
+function toggleSrvSide(){applySrvCollapsed(!srvCollapsed())}
+function initSrvSide(){let on=false;try{on=localStorage.getItem('odtSrvCollapsed')==='1'}catch(e){}applySrvCollapsed(on)}
+async function refreshServers(){try{let s=await (await fetch('/api/servers')).json();if(s&&s.servers){serverList=s.servers;if(s.currentServerId)currentServerId=s.currentServerId;renderSrvList()}}catch(e){}}
+function renderSrvList(){let ul=$('srv_list');if(!ul)return;
+ ul.innerHTML=(serverList||[]).map(s=>{let on=s.id===currentServerId?'on':'';
+  return `<li class="${on}" data-id="${esc(s.id)}" onclick="selectServer('${esc(s.id)}')"><span class=sn>${esc(s.name||s.base||s.id)}</span><span class=sb>${esc((s.adapter||'rds').toUpperCase()+' · '+(s.base||''))}</span></li>`}).join('')||`<li class=dim>${esc(t('srv.empty'))}</li>`}
+function clearServerUi(){/* wipe map/stations/PC/robots so previous server leaves zero leftover */
+ pools={start:[],end:[]};stations=[];setScene([]);geom=null;pcOff=null;sel.clear();jsonOpen.clear();
+ robotsCache=[];ordersCache=[];lastState=null;try{const box=$('rt');if(box)box.innerHTML=''}catch(e){}
+ if($('geominfo'))$('geominfo').textContent=t('map.needScene');try{if(C&&C.getContext)draw()}catch(e){}}
+async function selectServer(id){if(!id||id===currentServerId)return;
+ if(loaded){try{await saveCfg()}catch(e){}}
+ let r=await post('/api/servers/select',{id});if(!r||!r.ok){alert((r&&r.err)||t('srv.switchFail'));return}
+ currentServerId=r.currentServerId||id;let st=r.settings||{};
+ // reset transient UI state bound to previous server
+ clearServerUi();
+ applySettings(st);await loadTemplates(st&&st.activeTemplate);renderPool();renderSt();prevLater();
+ if(isM4()){await m4Load();m4Fill()}else{adapterUi()}
+ // reload cached scene for this server if any
+ try{let g=await (await fetch('/api/scene_geom?cached=1')).json();if(g.ok&&!g.sceneErr&&g.stations&&g.stations.length){setScene(g.stations);setGeom(g);$('info').textContent=sceneAt()}else{$('info').textContent=t('msg.loaded');$('geominfo').textContent=t('map.needScene')}}catch(e){}
+ renderSrvList();tick()}
+async function addServer(){let name=prompt(t('srv.addName'),'');if(name==null)return;name=name.trim();
+ if(!name){alert(t('srv.nameRequired'));return}
+ if(loaded){try{await saveCfg()}catch(e){}}
+ // New server: blank URL, RDS adapter (never inherit M4), no scene; backend seeds default template.
+ let r=await post('/api/servers/add',{name,adapter:'rds',activate:true});
+ if(!r||!r.ok){alert((r&&r.err)||'?');return}
+ currentServerId=r.id;serverList=r.servers||serverList;let st=r.settings||{};
+ if($('adsel')){$('adsel').value='rds';$('m4box').style.display='none'}
+ clearServerUi();
+ applySettings(st);await loadTemplates(st&&st.activeTemplate);renderPool();renderSt();
+ adapterUi();
+ $('info').textContent=t('srv.added');renderSrvList();tick()}
+async function renameServer(){if(!currentServerId)return;let cur=(serverList||[]).find(s=>s.id===currentServerId);let name=prompt(t('srv.renameQ'),(cur&&cur.name)||'');
+ if(name==null)return;name=name.trim();if(!name)return;
+ let r=await post('/api/servers/rename',{id:currentServerId,name});if(!r||!r.ok){alert((r&&r.err)||'?');return}
+ serverList=r.servers||serverList;renderSrvList()}
+async function delServer(){if(!currentServerId)return;if((serverList||[]).length<=1){alert(t('srv.last'));return}
+ let cur=(serverList||[]).find(s=>s.id===currentServerId);if(!confirm(t('srv.delQ',{name:(cur&&cur.name)||currentServerId})))return;
+ let r=await post('/api/servers/delete',{id:currentServerId});if(!r||!r.ok){alert((r&&r.err)||'?');return}
+ currentServerId=r.currentServerId;serverList=r.servers||[];let st=r.settings||{};
+ clearServerUi();
+ applySettings(st);await loadTemplates(st&&st.activeTemplate);renderPool();renderSt();
+ if(isM4()){await m4Load();m4Fill()}else adapterUi();
+ try{let g=await (await fetch('/api/scene_geom?cached=1')).json();if(g.ok&&!g.sceneErr&&g.stations&&g.stations.length){setScene(g.stations);setGeom(g)}}catch(e){}
+ renderSrvList();tick()}
 
 // ---------------- dispatcher adapter (RDS default) / M4 connection profiles ----------------
 // M4 secrets (app-key, password) are stored server-side only (settings.json, gitignored); the API returns them masked.
 let M4P={active:'default',profiles:{}};
-async function m4Load(){try{let r=await (await fetch('/api/m4')).json();M4P=r;$('adsel').value=r.adapter||'rds';$('m4box').style.display=r.adapter==='m4'?'':'none';m4Fill()}catch(e){}}
-function m4Fill(){let ns=Object.keys(M4P.profiles||{});if(!ns.length)ns=[M4P.active||'default'];
- $('m4prof').innerHTML=ns.map(n=>`<option${n===M4P.active?' selected':''}>${esc(n)}</option>`).join('');m4Show(M4P.active||ns[0])}
-function m4Show(n){let p=(M4P.profiles||{})[n]||{};$('m4name').value=n;$('m4base').value=p.base||'';$('m4scene').value=p.sceneId||'';$('m4auth').value=p.auth||'';
- $('m4appid').value=p.appId||'';$('m4appkey').value=p.appKey||'';$('m4user').value=p.username||'';$('m4pass').value=p.password||'';$('m4op').value=p.opMode||'binTask'}
-function m4Form(){return {base:$('m4base').value.trim(),sceneId:$('m4scene').value.trim(),auth:$('m4auth').value,appId:$('m4appid').value.trim(),appKey:$('m4appkey').value,
- username:$('m4user').value.trim(),password:$('m4pass').value,opMode:$('m4op').value}}
-async function m4Save(){let r=await post('/api/m4',{name:$('m4name').value.trim()||'default',profile:m4Form()});if(r.ok){M4P=r;m4Fill();$('m4msg').textContent=t('m4.saved')}else $('m4msg').textContent=r.err||'?'}
-async function m4Del(){let n=$('m4name').value.trim();if(!n||!confirm(t('m4.delQ',{name:n})))return;let r=await post('/api/m4',{name:n,delete:true});if(r.ok){M4P=r;m4Fill()}}
-async function m4Test(){$('m4msg').textContent='…';let r=await post('/api/m4_test',{name:$('m4prof').value,profile:m4Form()});
+async function m4Load(){try{let r=await (await fetch('/api/m4')).json();M4P=r;$('adsel').value=r.adapter||'rds';$('m4box').style.display=r.adapter==='m4'?'':'none';m4Fill();m4OpUi()}catch(e){}}
+function m4Fill(){let n=m4ActiveName();if(!(M4P.profiles||{})[n]){let ks=Object.keys(M4P.profiles||{});n=ks[0]||n;M4P.active=n}m4Show(n)}
+function m4SceneLabel(s){if(!s)return '';let id=s.id!=null?String(s.id):'';let n=(s.name||'').trim();if(n&&n!==id)return n+'（'+id+'）';return id}
+function m4SceneNameFromOpt(opt,id){if(!opt)return '';let t=(opt.textContent||'').trim();if(!t||t===id)return '';let i=t.indexOf('（');if(i>0&&t.endsWith('）'))return t.slice(0,i).trim();return t!==id?t:''}
+function m4SetScene(id,name){let sel=$('m4scenes');if(!sel)return;id=id||'';
+ let opt=[...sel.options].find(o=>o.value===id);if(id&&!opt){opt=document.createElement('option');opt.value=id;opt.textContent=id;sel.appendChild(opt)}
+ if(opt){let n=(name||'').trim();if(!n)n=m4SceneNameFromOpt(opt,id);opt.textContent=m4SceneLabel({id,name:n})}
+ sel.value=id}
+function m4NormAuth(p){p=p||{};let a=p.auth;if(a==='appkey'||a==='login')return a;return (p.appId&&p.appKey)?'appkey':'login'}
+function m4AuthUi(){let a=$('m4auth').value==='appkey'?'appkey':'login';$('m4auth').value=a;
+ $('m4authKey').style.display=a==='appkey'?'':'none';$('m4authLogin').style.display=a==='login'?'':'none'}
+function adapterUi(){let m=$('adsel').value==='m4';let tbl=$('steps');if(tbl)tbl.classList.toggle('no-vs',m);if(cur)renderSteps()}
+function m4OpUi(){adapterUi()}
+function m4Show(n){n=n||m4ActiveName();let p=(M4P.profiles||{})[n]||{};if(p.base)$('base').value=p.base;m4SetScene(p.sceneId||'', p.sceneName||'');$('m4auth').value=m4NormAuth(p);
+ $('m4appid').value=p.appId||'';$('m4appkey').value=p.appKey||'';$('m4user').value=p.username||'';$('m4pass').value=p.password||'';m4AuthUi()}
+function m4Form(){let a=$('m4auth').value==='appkey'?'appkey':'login';let sid=$('m4scenes').value.trim(),opt=$('m4scenes').selectedOptions[0];
+ return {base:$('base').value.trim(),sceneId:sid,sceneName:m4SceneNameFromOpt(opt,sid),auth:a,appId:$('m4appid').value.trim(),appKey:$('m4appkey').value,
+ username:$('m4user').value.trim(),password:$('m4pass').value}}
+async function m4Save(){let r=await post('/api/m4',{name:m4ActiveName(),profile:m4Form()});if(r.ok){M4P=r;m4Fill();await refreshServers()}else $('m4msg').textContent=r.err||'?'}
+async function m4Test(){$('m4msg').textContent='…';let r=await post('/api/m4_test',{name:m4ActiveName(),profile:m4Form()});
  if(!r.ok){$('m4msg').textContent=t('m4.testFail',{err:r.err||r.ping||''});return}
- let sc=r.scenes||[];$('m4scenes').innerHTML=`<option value="">${esc(t('m4.pickScene'))}</option>`+sc.map(s=>`<option value="${esc(s.id)}">${esc(s.name+' ('+s.id+')'+(s.disabled?' ✗':''))}</option>`).join('');
- $('m4msg').textContent=t('m4.testOk',{auth:r.auth,n:sc.length})}
-async function setAdapter(a){let r=await post('/api/adapter',{adapter:a});if(!r.ok){alert(r.err);return}$('m4box').style.display=a==='m4'?'':'none';$('m4msg').textContent='';
- try{loadTemplates()}catch(e){}}
+ let sc=r.scenes||[],cur=$('m4scenes').value||'';
+ $('m4scenes').innerHTML=`<option value="">${esc(t('m4.pickScene'))}</option>`+sc.map(s=>`<option value="${esc(s.id)}">${esc(m4SceneLabel(s)+(s.disabled?' ✗':''))}</option>`).join('');
+ if(cur&&sc.some(s=>s.id===cur))m4SetScene(cur, (sc.find(s=>s.id===cur)||{}).name);else if(sc.length===1)m4SetScene(sc[0].id, sc[0].name);
+ let pick=$('m4scenes').value;if(pick){let s=sc.find(x=>x.id===pick);if(s)m4SetScene(pick,s.name)}
+ $('m4msg').textContent=t('m4.testOk',{auth:r.auth,n:sc.length});
+ // remember name so reload shows exol（id） without re-test
+ try{await post('/api/m4',{name:m4ActiveName(),profile:{sceneId:pick||'',sceneName:(sc.find(x=>x.id===pick)||{}).name||''}})}catch(e){}}
+async function setAdapter(a){
+ // leaving RDS → keep settings.base; leaving M4 → write URL into active profile first
+ if(a==='m4')await post('/api/config',{base:$('base').value.trim(),pollSec:+$('poll').value,settings:{adapter:'m4'}});
+ else{await post('/api/m4',{name:m4ActiveName(),profile:{base:$('base').value.trim()}})}
+ let r=await post('/api/adapter',{adapter:a});if(!r.ok){alert(r.err);return}
+ $('m4box').style.display=a==='m4'?'':'none';$('m4msg').textContent='';
+ if(r.base)$('base').value=r.base;if(a==='m4'){await m4Load()}else m4OpUi();
+ try{loadTemplates()}catch(e){}
+ await refreshServers()}

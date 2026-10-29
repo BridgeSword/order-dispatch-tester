@@ -1,7 +1,7 @@
 # -*- coding: utf-8 -*-
 """Dispatcher-neutral core: settings, templates, drafts, batches, polling, stuck detection.
 All dispatcher I/O goes through ``S["adapter"]`` (see adapters/base.py)."""
-import datetime, io, json, math, os, random, sys, threading, time, uuid, zipfile
+import copy, datetime, io, json, math, os, random, shutil, sys, threading, time, uuid, zipfile
 from . import templates as T
 from .adapters import get_adapter, ADAPTERS
 from .adapters import rds_scene
@@ -29,7 +29,8 @@ def init(data_dir, adapter="rds", base="http://127.0.0.1:8088"):
     P["maps"] = os.path.join(P["data"], "maps")
     P["scene_cache"] = os.path.join(P["data"], "scene_cache.json")
     P["log"] = os.path.join(P["logs"], "rds_%s.jsonl" % datetime.datetime.now().strftime("%Y%m%d_%H%M%S"))
-    S["store"] = T.Store(os.path.join(P["data"], "templates"))
+    P["templates"] = os.path.join(P["data"], "templates"); os.makedirs(P["templates"], exist_ok=True)
+    S["store"] = T.Store(P["templates"])  # rebound to templates/<serverId>/ after migrate / select
     S["adapter"] = get_adapter(adapter, base, log)
     restore_scene_cache()
 
@@ -38,23 +39,354 @@ def TERMINAL(): return AD().terminal_states
 def msg(key, **kw): return i18n.t(load_settings().get("lang") or "zh", key, **kw)
 
 # ---------------------------------------------------------------- settings
-def load_settings():
+# Per-dispatcher-server persistence. File shape (v2):
+#   { "version": 2, "lang": "zh", "currentServerId": "<id>",
+#     "servers": [ { "id", "name", "base", "adapter", "pollSec", "fields", "pools",
+#                    "activeTemplate", "strategy", "pm", "smapPath", "smapAuto",
+#                    "smapAutoHash", "vsPerBlock", "m4": {active, profiles} }, ... ] }
+# load_settings() returns a flat view of the current server (+ lang / currentServerId / servers)
+# so existing callers keep working. save_settings() routes keys into the current server bucket
+# (except GLOBAL_KEYS). Secrets (M4 appKey/password) are never logged.
+
+GLOBAL_KEYS = frozenset({"lang", "version", "currentServerId", "servers"})
+SERVER_KEYS = frozenset({
+    "name", "base", "adapter", "pollSec", "fields", "pools", "starts", "ends",
+    "activeTemplate", "strategy", "pm", "pmPool", "smapPath", "smapAuto", "smapAutoHash",
+    "vsPerBlock", "vsBlocks", "m4",
+})
+DEFAULT_BASE = "http://127.0.0.1:8088"
+
+def normalize_base(url):
+    """strip whitespace and trailing slash; empty stays empty"""
+    if not isinstance(url, str): return ""
+    u = url.strip()
+    while u.endswith("/"): u = u[:-1]
+    return u
+
+def _m4_active_base(srv):
+    """URL from the active (or first) M4 profile when server.base is empty."""
+    m = srv.get("m4") if isinstance(srv, dict) else None
+    m = m if isinstance(m, dict) else {}
+    profs = m.get("profiles") if isinstance(m.get("profiles"), dict) else {}
+    if not profs: return ""
+    act = m.get("active") or ""
+    p = profs.get(act) if act in profs else None
+    if not isinstance(p, dict):
+        p = next(iter(profs.values()), None)
+    if not isinstance(p, dict): return ""
+    return normalize_base(p.get("base") or "")
+
+def _new_server_id():
+    return "srv-" + uuid.uuid4().hex[:10]
+
+def _host_label(base):
+    try:
+        from urllib.parse import urlparse
+        h = urlparse(base if "://" in base else "http://" + base).hostname
+        if h: return h
+    except Exception: pass
+    return ""
+
+def default_server(base=None, name=None, adapter="rds"):
+    b = normalize_base(base or DEFAULT_BASE) or DEFAULT_BASE
+    return {
+        "id": _new_server_id(),
+        "name": name or _host_label(b) or "默认",
+        "base": b,
+        "adapter": adapter or "rds",
+        "pollSec": 2,
+        "fields": {},
+        "pools": {"start": [], "end": []},
+        "activeTemplate": "",
+        "strategy": "random",
+        "pm": "start",
+        "m4": {"active": "default", "profiles": {}},
+    }
+
+def _read_raw():
     try:
         with open(P["settings"], encoding="utf-8") as f: d = json.load(f)
         return d if isinstance(d, dict) else {}
     except Exception: return {}
 
+def _write_raw(d):
+    tmp = P["settings"] + ".tmp"
+    with open(tmp, "w", encoding="utf-8") as f: json.dump(d, f, ensure_ascii=False, indent=1)
+    os.replace(tmp, P["settings"])
+
+def _is_v2(raw):
+    return isinstance(raw.get("servers"), list)
+
+def _flatten(raw, srv=None):
+    """flat view: current server fields + global lang/currentServerId + servers summary"""
+    if not isinstance(raw, dict): raw = {}
+    servers = raw.get("servers") if isinstance(raw.get("servers"), list) else []
+    sid = raw.get("currentServerId")
+    if srv is None:
+        srv = next((s for s in servers if isinstance(s, dict) and s.get("id") == sid), None)
+        if srv is None and servers:
+            srv = next((s for s in servers if isinstance(s, dict)), None)
+    out = {}
+    if isinstance(srv, dict):
+        for k, v in srv.items():
+            if k == "id": continue
+            out[k] = copy.deepcopy(v)
+        out["id"] = srv.get("id")
+    out["lang"] = raw.get("lang") or "zh"
+    out["currentServerId"] = (srv or {}).get("id") or sid
+    out["version"] = raw.get("version") or 2
+    # lightweight list for UI (no secrets); M4 falls back to active profile base when server.base is blank
+    out["servers"] = []
+    for s in servers:
+        if not isinstance(s, dict) or not s.get("id"): continue
+        base = s.get("base") or ""
+        if not base and (s.get("adapter") or "rds") == "m4":
+            base = _m4_active_base(s)
+        out["servers"].append({"id": s.get("id"), "name": s.get("name") or "", "base": base or "", "adapter": s.get("adapter") or "rds"})
+    return out
+
+def load_settings():
+    raw = _read_raw()
+    if not raw: return {}
+    if _is_v2(raw): return _flatten(raw)
+    # pre-migration flat file: return as-is (migrate_servers will rewrite)
+    return raw
+
+def _ensure_v2_unlocked(raw=None):
+    """ensure raw is v2 with at least one server; does not write. Caller holds lock if writing."""
+    raw = dict(raw if raw is not None else _read_raw())
+    if not _is_v2(raw):
+        # treat as flat; caller should have migrated. synthesize ephemeral.
+        srv = default_server(raw.get("base"), name="默认", adapter=raw.get("adapter") or "rds")
+        for k in SERVER_KEYS:
+            if k in raw and k not in ("name",): srv[k] = copy.deepcopy(raw[k])
+        if isinstance(raw.get("m4"), dict): srv["m4"] = copy.deepcopy(raw["m4"])
+        raw = {"version": 2, "lang": raw.get("lang") or "zh", "currentServerId": srv["id"], "servers": [srv]}
+    servers = [s for s in (raw.get("servers") or []) if isinstance(s, dict)]
+    if not servers:
+        srv = default_server()
+        raw["servers"] = [srv]
+        raw["currentServerId"] = srv["id"]
+        servers = [srv]
+    sid = raw.get("currentServerId")
+    if not any(s.get("id") == sid for s in servers):
+        raw["currentServerId"] = servers[0]["id"]
+    raw["version"] = 2
+    raw.setdefault("lang", "zh")
+    return raw
+
+def current_server(raw=None):
+    raw = _ensure_v2_unlocked(raw)
+    sid = raw.get("currentServerId")
+    for s in raw["servers"]:
+        if s.get("id") == sid: return s, raw
+    return raw["servers"][0], raw
+
 def save_settings(part):
-    """merge into settings.json: only the given keys are updated"""
+    """merge into settings.json: global keys at top level; other keys into the current server bucket"""
     if not isinstance(part, dict) or not part: return
     with lock:
-        cur = load_settings()
+        raw = _ensure_v2_unlocked()
+        # apply global
+        if "lang" in part and part["lang"]:
+            raw["lang"] = part["lang"]
+        if "currentServerId" in part and part["currentServerId"]:
+            if any(s.get("id") == part["currentServerId"] for s in raw["servers"]):
+                raw["currentServerId"] = part["currentServerId"]
+        srv, raw = current_server(raw)
         for k, v in part.items():
-            if isinstance(v, dict) and isinstance(cur.get(k), dict) and k not in ("pools", "pmPool"): cur[k].update(v)
-            else: cur[k] = v
-        tmp = P["settings"] + ".tmp"
-        with open(tmp, "w", encoding="utf-8") as f: json.dump(cur, f, ensure_ascii=False, indent=1)
-        os.replace(tmp, P["settings"])
+            if k in GLOBAL_KEYS: continue
+            if k == "id": continue
+            if k == "base" and isinstance(v, str): v = normalize_base(v)
+            if isinstance(v, dict) and isinstance(srv.get(k), dict) and k not in ("pools", "pmPool"):
+                srv[k] = dict(srv.get(k) or {}); srv[k].update(v)
+            else:
+                srv[k] = v
+        # keep top-level servers list in sync
+        for i, s in enumerate(raw["servers"]):
+            if s.get("id") == srv.get("id"):
+                raw["servers"][i] = srv
+                break
+        _write_raw(raw)
+
+def servers_list():
+    raw = _read_raw()
+    if not _is_v2(raw):
+        raw = _ensure_v2_unlocked(raw if raw else {})
+    else:
+        raw = _ensure_v2_unlocked(raw)
+    flat = _flatten(raw)
+    return {"servers": flat["servers"], "currentServerId": flat["currentServerId"], "lang": flat.get("lang") or "zh"}
+
+def add_server(name=None, base=None, adapter=None, activate=True):
+    """Create a new server with empty connection fields / pools / scene.
+    Seeds that server's template store with T.builtin_default() and sets activeTemplate
+    to its name (usually "default"). Does not re-seed later if the user clears templates.
+    Name is required (non-empty after strip); returns None if missing.
+    Does not copy the current form URL; pass base only when the caller supplies one.
+    Adapter is always RDS for new servers (adapter arg ignored); user may change later
+    via /api/adapter. Drafts/sent/scene stay empty until the user fills them."""
+    name = (name or "").strip()
+    if not name:
+        return None
+    with lock:
+        raw = _ensure_v2_unlocked()
+        ad = "rds"  # never inherit previous (e.g. M4); user changes later if needed
+        explicit = normalize_base(base) if (isinstance(base, str) and base.strip()) else ""
+        # scaffold via default_server then blank the URL unless explicitly provided
+        srv = default_server(explicit or DEFAULT_BASE, name=name, adapter=ad)
+        srv["name"] = name
+        if not explicit:
+            srv["base"] = ""
+        # per-server template folder + seed builtin default (once at create)
+        td = templates_dir(srv["id"])
+        try: os.makedirs(td, exist_ok=True)
+        except Exception: pass
+        t = T.builtin_default()
+        try:
+            T.Store(td).put(t)
+            srv["activeTemplate"] = t.get("name") or "default"
+        except Exception:
+            srv["activeTemplate"] = ""
+        raw["servers"].append(srv)
+        if activate: raw["currentServerId"] = srv["id"]
+        _write_raw(raw)
+        return srv["id"]
+
+
+def rename_server(sid, name):
+    name = (name or "").strip()
+    if not name: return False
+    with lock:
+        raw = _ensure_v2_unlocked()
+        for s in raw["servers"]:
+            if s.get("id") == sid:
+                s["name"] = name
+                _write_raw(raw)
+                return True
+        return False
+
+def delete_server(sid):
+    with lock:
+        raw = _ensure_v2_unlocked()
+        servers = [s for s in raw["servers"] if isinstance(s, dict)]
+        if len(servers) <= 1: return False, "last"
+        if not any(s.get("id") == sid for s in servers): return False, "missing"
+        raw["servers"] = [s for s in servers if s.get("id") != sid]
+        if raw.get("currentServerId") == sid:
+            raw["currentServerId"] = raw["servers"][0]["id"]
+        _write_raw(raw)
+        return True, raw["currentServerId"]
+
+def apply_current_server(clear_drafts=True):
+    """reconfigure adapter / cfg / scene / drafts / sent / templates from the current server bucket.
+    clear_drafts=True also clears ALL in-memory orders (draft + sent) then reloads
+    both buckets for the current server — required for per-server isolation.
+    Always clears in-memory scene/geom/stations cache first, then restores only this
+    server's scene_cache bucket (empty for a new server → zero leftover LM/point cloud)."""
+    st = load_settings()
+    set_adapter(st.get("adapter") or "rds")
+    set_base(st.get("base") or "")
+    if st.get("pollSec"): S["cfg"]["pollSec"] = st["pollSec"]
+    f0 = st.get("fields") if isinstance(st.get("fields"), dict) else {}
+    S["cfg"]["blockByBlock"] = bool(f0.get("bbb"))
+    try: S["cfg"]["incPollSec"] = float(f0.get("bbb_poll") or 1)
+    except (TypeError, ValueError): S["cfg"]["incPollSec"] = 1.0
+    with lock:
+        if clear_drafts:
+            S["orders"].clear()
+        # wipe live scene so a previous server's LM/PC cannot linger
+        S["geom"] = None; S["groups"] = []; S["robot_group"] = {}; S["prepoints"] = {}
+        S["robots"].clear(); S["opos"].clear(); S["robots_raw"] = None
+        S.pop("st_cache", None); S.pop("precands", None)
+        SCENE_JOB.clear()
+    bind_template_store(st.get("currentServerId") or st.get("id"))
+    restore_scene_cache()  # no-op / empty when this server has no cache
+    if clear_drafts:
+        load_drafts()
+        load_sent()
+    return st
+
+def select_server(sid, force=False):
+    """switch active server: persist drafts+sent under old id, clear memory, load new buckets"""
+    with lock:
+        raw = _ensure_v2_unlocked()
+        if not any(s.get("id") == sid for s in raw["servers"]):
+            return False, "missing"
+        old = raw.get("currentServerId")
+        if old == sid and not force:
+            return True, sid
+        if old and old != sid:
+            try: _save_drafts_for(old)
+            except Exception: pass
+            try: _save_sent_for(old)
+            except Exception: pass
+        raw["currentServerId"] = sid
+        _write_raw(raw)
+    apply_current_server(clear_drafts=True)
+    return True, sid
+
+def migrate_servers():
+    """one-shot: flat settings.json -> servers list. Backup as settings.pre_server.json (copy). Idempotent.
+    Always runs drafts/scene/sent nesting afterward so already-v2 installs still get sent_orders nested."""
+    notes = []
+    with lock:
+        raw = _read_raw()
+        if not raw:
+            srv = default_server()
+            _write_raw({"version": 2, "lang": "zh", "currentServerId": srv["id"], "servers": [srv]})
+            notes.append("created empty v2 settings with default server")
+        elif _is_v2(raw) and raw.get("version") == 2:
+            raw = _ensure_v2_unlocked(raw)
+            _write_raw(raw)
+        else:
+            # backup before rewrite
+            bak = os.path.join(P["data"], "settings.pre_server.json")
+            if os.path.exists(P["settings"]) and not os.path.exists(bak):
+                shutil.copy2(P["settings"], bak)
+                notes.append("backup " + os.path.basename(bak))
+            lang = raw.get("lang") or "zh"
+            servers = []
+            # primary entry from flat fields
+            base = normalize_base(raw.get("base") or "")
+            adapter = raw.get("adapter") or "rds"
+            m4 = raw.get("m4") if isinstance(raw.get("m4"), dict) else {}
+            profs = m4.get("profiles") if isinstance(m4.get("profiles"), dict) else {}
+            active_prof = m4.get("active") or (next(iter(profs)) if profs else None)
+            if adapter == "m4" and active_prof and isinstance(profs.get(active_prof), dict):
+                pb = normalize_base(profs[active_prof].get("base") or "") or base
+                base = pb or base
+            if not base: base = DEFAULT_BASE
+            label = _host_label(base) or "默认"
+            primary = default_server(base, name=label, adapter=adapter)
+            for k in SERVER_KEYS:
+                if k in ("name", "base", "adapter", "m4"): continue
+                if k in raw: primary[k] = copy.deepcopy(raw[k])
+            if isinstance(raw.get("m4"), dict):
+                primary["m4"] = copy.deepcopy(raw["m4"])
+            elif not primary.get("m4"):
+                primary["m4"] = {"active": "default", "profiles": {}}
+            servers.append(primary)
+            # extra M4 profiles (other than the one folded into primary) become their own servers
+            for pname, p in profs.items():
+                if not isinstance(p, dict): continue
+                if adapter == "m4" and pname == active_prof: continue
+                pb = normalize_base(p.get("base") or "") or DEFAULT_BASE
+                extra = default_server(pb, name=str(pname), adapter="m4")
+                extra["m4"] = {"active": pname, "profiles": {pname: copy.deepcopy(p)}}
+                servers.append(extra)
+                notes.append("m4 profile %r -> server" % pname)
+            new = {"version": 2, "lang": lang, "currentServerId": primary["id"], "servers": servers}
+            _write_raw(new)
+            notes.append("migrated flat settings -> %d server(s)" % len(servers))
+    # migrate scene_cache + drafts + sent_orders nesting (best-effort, after unlock)
+    try: _migrate_scene_cache_nesting()
+    except Exception as e: notes.append("scene_cache nest: %s" % e)
+    try: _migrate_drafts_nesting()
+    except Exception as e: notes.append("drafts nest: %s" % e)
+    try: _migrate_sent_nesting()
+    except Exception as e: notes.append("sent nest: %s" % e)
+    return notes
 
 VS_ROLES = ["pre", "s", "script", "e", "lift"]
 
@@ -76,21 +408,86 @@ def migrate_vs_settings():
     save_settings({"vsPerBlock": {r: {"on": bool(on) and r in vsb, "head": h, "tail": t} for r in VS_ROLES}})
     return True
 
+def templates_dir(sid=None):
+    """per-server template folder: <data>/templates/<serverId>/"""
+    sid = sid or _current_server_id() or "default"
+    # sanitize path segment (ids are srv_ + hex; still guard)
+    sid = "".join(c for c in str(sid) if c.isalnum() or c in "-_") or "default"
+    return os.path.join(P.get("templates") or os.path.join(P["data"], "templates"), sid)
+
+def bind_template_store(sid=None):
+    """point S['store'] at templates/<serverId>/ (creates the dir)."""
+    d = templates_dir(sid)
+    os.makedirs(d, exist_ok=True)
+    S["store"] = T.Store(d)
+    return S["store"]
+
+def migrate_templates_nesting():
+    """Move shared templates/*.json into templates/<currentServerId>/. Idempotent.
+    Existing shared library becomes the original/current server's bucket so nothing is lost.
+    New servers get their own folder (seeded with builtin default in add_server)."""
+    notes = []
+    root = P.get("templates") or os.path.join(P["data"], "templates")
+    os.makedirs(root, exist_ok=True)
+    sid = _current_server_id() or "default"
+    flat = [f for f in os.listdir(root)
+            if f.endswith(".json") and os.path.isfile(os.path.join(root, f))]
+    if flat:
+        dest = templates_dir(sid)
+        os.makedirs(dest, exist_ok=True)
+        bak = os.path.join(P["data"], "templates.pre_server")
+        if not os.path.exists(bak):
+            try:
+                os.makedirs(bak, exist_ok=True)
+                for f in flat:
+                    shutil.copy2(os.path.join(root, f), os.path.join(bak, f))
+                notes.append("backup templates.pre_server/")
+            except Exception:
+                pass
+        for f in flat:
+            src = os.path.join(root, f)
+            dst = os.path.join(dest, f)
+            if os.path.exists(dst):
+                try: os.remove(src)
+                except Exception: pass
+            else:
+                shutil.move(src, dst)
+        notes.append("migrated %d template(s) -> templates/%s/" % (len(flat), sid))
+    bind_template_store(sid)
+    return notes
+
+def _templates_tree_has_json():
+    root = P.get("templates") or os.path.join(P["data"], "templates")
+    if not os.path.isdir(root): return False
+    for dirpath, _, filenames in os.walk(root):
+        if any(f.endswith(".json") for f in filenames):
+            return True
+    return False
+
 def migrate_templates():
-    """legacy settings.json (fixed five-block form) -> templates/default.json + settings.pools/activeTemplate. Idempotent."""
+    """Nest shared templates under current server; seed builtin default only on a truly empty
+    first install (no template json anywhere). Never recreate default when other templates
+    exist; never seed into a new empty server that sits beside an existing bucket."""
     st = load_settings(); notes = []
+    notes.extend(migrate_templates_nesting())
     store = S["store"]
-    if "default" not in store.names():
+    names = store.names()
+    if not names and not _templates_tree_has_json():
         t = T.from_legacy_settings(st) if st else None
         store.put(t or T.builtin_default()); notes.append("templates/default.json created" + (" from legacy settings" if t else ""))
+        names = store.names()
     part = {}
     if not isinstance(st.get("pools"), dict):
         part["pools"] = {"start": list(st.get("starts") or []), "end": list(st.get("ends") or [])}
         notes.append("pools migrated from starts/ends")
-    if not st.get("activeTemplate"): part["activeTemplate"] = "default"
+    act = st.get("activeTemplate")
+    if names and (not act or act not in names):
+        part["activeTemplate"] = names[0]
+    elif not names and act:
+        part["activeTemplate"] = ""
     if part:
         if os.path.exists(P["settings"]) and not os.path.exists(P["settings"] + ".bak-v1"):
-            import shutil; shutil.copy2(P["settings"], P["settings"] + ".bak-v1")
+            shutil.copy2(P["settings"], P["settings"] + ".bak-v1")
         save_settings(part)
     return notes
 
@@ -100,12 +497,15 @@ def log(kind, **kw):
     with lock, open(P["log"], "a", encoding="utf-8") as f: f.write(json.dumps(kw, ensure_ascii=False) + "\n")
 
 def set_base(url):
-    if url and getattr(AD(), "base_from_settings", True): AD().base = url
+    """Set adapter base URL. None = leave unchanged; empty string clears (blank server)."""
+    if url is None: return
+    if getattr(AD(), "base_from_settings", True):
+        AD().base = url or ""
 
 # ---------------------------------------------------------------- adapter selection / M4 connection profiles
 # settings.json (gitignored): "adapter": "rds"|"m4", "m4": {"active": name, "profiles": {name: {base, sceneId, auth,
 # appId, appKey, username, password, opMode}}}. Secrets are masked in every API response and never logged.
-M4_FIELDS = ("base", "sceneId", "auth", "appId", "appKey", "username", "password", "opMode")
+M4_FIELDS = ("base", "sceneId", "sceneName", "auth", "appId", "appKey", "username", "password", "opMode")
 def m4_settings():
     m = load_settings().get("m4")
     m = m if isinstance(m, dict) else {}
@@ -134,7 +534,12 @@ def m4_save(name, prof, activate=True, delete=False):
                 if k in SECRET_KEYS and v == MASK: v = old.get(k, "")
                 new[k] = v.strip() if isinstance(v, str) else v
             profs[name] = new; act = name if activate else m["active"]
-        save_settings({"m4": {"active": act, "profiles": profs}})
+        part = {"m4": {"active": act, "profiles": profs}}
+        # keep server.base in sync so the sidebar shows the M4 URL (saveCfg clears settings.base for M4)
+        if not delete:
+            pb = normalize_base((profs.get(act) or {}).get("base") or "")
+            if pb: part["base"] = pb
+        save_settings(part)
     return act
 
 def set_adapter(name):
@@ -219,10 +624,41 @@ def _apply_geom(g):
         gs = g.get("groups") or []
         if gs: S["groups"] = gs; S["robot_group"] = {rid: x["name"] for x in gs for rid in x["robots"]}
 
+def _current_server_id():
+    st = load_settings()
+    return st.get("currentServerId") or st.get("id") or "default"
+
+def _read_scene_cache_file():
+    try:
+        with open(P["scene_cache"], encoding="utf-8") as f: return json.load(f)
+    except Exception: return None
+
+def _migrate_scene_cache_nesting():
+    """flat scene_cache.json -> {byServer: {id: geom}}. Keeps original keys under current server."""
+    g = _read_scene_cache_file()
+    if not isinstance(g, dict): return
+    if isinstance(g.get("byServer"), dict): return
+    if not (g.get("ok") and g.get("stations")): return
+    sid = _current_server_id()
+    nested = {"byServer": {sid: g}}
+    tmp = P["scene_cache"] + ".tmp"
+    with open(tmp, "w", encoding="utf-8") as f: json.dump(nested, f, ensure_ascii=False)
+    os.replace(tmp, P["scene_cache"])
+
 def save_scene_cache(g):
     try:
+        sid = _current_server_id()
+        cur = _read_scene_cache_file()
+        if isinstance(cur, dict) and isinstance(cur.get("byServer"), dict):
+            store = dict(cur); store["byServer"] = dict(cur["byServer"]); store["byServer"][sid] = g
+        elif isinstance(cur, dict) and cur.get("ok") and cur.get("stations"):
+            # legacy flat mid-flight: nest both
+            old_sid = sid
+            store = {"byServer": {old_sid: cur, sid: g}}
+        else:
+            store = {"byServer": {sid: g}}
         tmp = P["scene_cache"] + ".tmp"
-        with open(tmp, "w", encoding="utf-8") as f: json.dump(g, f, ensure_ascii=False)
+        with open(tmp, "w", encoding="utf-8") as f: json.dump(store, f, ensure_ascii=False)
         os.replace(tmp, P["scene_cache"])
     except Exception as e: log("scene_cache_save_fail", err=str(e))
 
@@ -250,12 +686,17 @@ def backfill_dirs(g, path=None):
         log("dir_backfill_fail", err=str(e)); return 0
 
 def restore_scene_cache():
-    """last successful scene load survives page reloads and server restarts"""
+    """last successful scene load for the current server survives page reloads and server restarts"""
     try:
-        with open(P["scene_cache"], encoding="utf-8") as f: g = json.load(f)
+        blob = _read_scene_cache_file()
+        if not isinstance(blob, dict): return False
+        if isinstance(blob.get("byServer"), dict):
+            g = blob["byServer"].get(_current_server_id())
+        else:
+            g = blob  # legacy flat
         if isinstance(g, dict) and g.get("ok") and g.get("stations"):
-            g["fromCache"] = True; _apply_geom(g)
-            if not any(isinstance(q.get("dir"), (int, float)) for q in g["stations"]):  # cache from before headings were parsed
+            g = dict(g); g["fromCache"] = True; _apply_geom(g)
+            if not any(isinstance(q.get("dir"), (int, float)) for q in g["stations"]):
                 threading.Thread(target=backfill_dirs, args=(g,), daemon=True).start()
             return True
     except FileNotFoundError: pass
@@ -347,7 +788,7 @@ def build_geom(refresh=False, progress=None):
                 else: notes.append("/downloadScene: zip without .smap")
             except Exception as e: notes.append("/downloadScene parse failed: %s" % e)
         else: notes.append("/downloadScene unavailable (HTTP %s)" % code)
-    if not pts: notes.append("no point cloud: upload a .smap or set a local smap path on the Map tab")
+    if not pts: notes.append("no point cloud in scene/map download (normalPosList); check dispatcher scene or /downloadScene")
     g = {"ok": True, "curves": curves, "points": [c for p in pts for c in p], "npoints": len(pts), "cell": cell,
          "bounds": rds_scene.geom_bounds(curves, pts, stations), "stations": stations, "pointSrc": psrc, "curveSrc": csrc, "notes": notes, "sceneErr": scene_err}
     if not scene_err:
@@ -505,28 +946,97 @@ def _upgrade_record(o):
     o.setdefault("template", "default"); o.setdefault("adapter", "rds")
     return o
 
-def save_drafts():
+def _read_drafts_file():
+    try:
+        with open(P["drafts"], encoding="utf-8-sig") as f: return json.load(f)
+    except Exception: return None
+
+def _migrate_drafts_nesting():
+    """flat drafts.json list -> {byServer: {id: [...]}} under current server."""
+    d = _read_drafts_file()
+    if d is None: return
+    if isinstance(d, dict) and isinstance(d.get("byServer"), dict): return
+    if not isinstance(d, list): return
+    sid = _current_server_id()
+    nested = {"byServer": {sid: d}}
+    tmp = P["drafts"] + ".tmp"
+    with open(tmp, "w", encoding="utf-8") as f: json.dump(nested, f, ensure_ascii=False)
+    os.replace(tmp, P["drafts"])
+
+def _save_drafts_for(sid):
     with lock:
         d = [o for o in S["orders"].values() if o["state"] == DRAFT]
-        tmp = P["drafts"] + ".tmp"
-        with open(tmp, "w", encoding="utf-8") as f: json.dump(d, f, ensure_ascii=False)
-        os.replace(tmp, P["drafts"])
+    blob = _read_drafts_file()
+    if isinstance(blob, dict) and isinstance(blob.get("byServer"), dict):
+        store = dict(blob); store["byServer"] = dict(blob["byServer"]); store["byServer"][sid or "default"] = d
+    elif isinstance(blob, list):
+        store = {"byServer": {(sid or "default"): d}}
+    else:
+        store = {"byServer": {(sid or "default"): d}}
+    tmp = P["drafts"] + ".tmp"
+    with open(tmp, "w", encoding="utf-8") as f: json.dump(store, f, ensure_ascii=False)
+    os.replace(tmp, P["drafts"])
+
+def save_drafts():
+    _save_drafts_for(_current_server_id())
+
+def _read_sent_file():
+    try:
+        with open(P["sent"], encoding="utf-8-sig") as f: return json.load(f)
+    except Exception: return None
+
+def _migrate_sent_nesting():
+    """flat sent_orders.json list -> {byServer: {id: [...]}} under current server.
+    Idempotent. Backs up the flat file as sent_orders.pre_server.json before rewrite."""
+    d = _read_sent_file()
+    if d is None: return
+    if isinstance(d, dict) and isinstance(d.get("byServer"), dict): return
+    if not isinstance(d, list): return
+    sid = _current_server_id()
+    bak = os.path.join(P["data"], "sent_orders.pre_server.json")
+    if os.path.exists(P["sent"]) and not os.path.exists(bak):
+        shutil.copy2(P["sent"], bak)
+    nested = {"byServer": {sid: d}}
+    tmp = P["sent"] + ".tmp"
+    with open(tmp, "w", encoding="utf-8") as f: json.dump(nested, f, ensure_ascii=False)
+    os.replace(tmp, P["sent"])
 
 _sent_sig = [None]
-def save_sent():
+def _save_sent_for(sid):
+    """Write only this server's non-draft orders into its byServer bucket (other buckets untouched)."""
     try:
+        _migrate_sent_nesting()
         with lock: d = [o for o in S["orders"].values() if o["state"] != DRAFT]
-        sig = json.dumps([(o["id"], o["state"], o.get("sig"), o.get("changed"), o.get("vehicle"), o.get("error"), o.get("started"), o.get("ended"), o.get("assigned"), o.get("batch"), o.get("inc")) for o in d], ensure_ascii=False)
+        key = sid or "default"
+        sig = key + "|" + json.dumps([(o["id"], o["state"], o.get("sig"), o.get("changed"), o.get("vehicle"), o.get("error"), o.get("started"), o.get("ended"), o.get("assigned"), o.get("batch"), o.get("inc")) for o in d], ensure_ascii=False)
         if sig == _sent_sig[0]: return
+        blob = _read_sent_file()
+        if isinstance(blob, dict) and isinstance(blob.get("byServer"), dict):
+            store = dict(blob); store["byServer"] = dict(blob["byServer"]); store["byServer"][key] = d
+        elif isinstance(blob, list):
+            store = {"byServer": {key: d}}
+        else:
+            store = {"byServer": {key: d}}
         tmp = P["sent"] + ".tmp"
-        with open(tmp, "w", encoding="utf-8") as f: json.dump(d, f, ensure_ascii=False)
+        with open(tmp, "w", encoding="utf-8") as f: json.dump(store, f, ensure_ascii=False)
         os.replace(tmp, P["sent"]); _sent_sig[0] = sig
     except Exception as e: print("save_sent error:", e, flush=True)
 
+def save_sent():
+    _save_sent_for(_current_server_id())
+
 def load_sent():
     try:
-        with open(P["sent"], encoding="utf-8-sig") as f: d = json.load(f)
+        blob = _read_sent_file()
+        if blob is None: return 0
+        if isinstance(blob, dict) and isinstance(blob.get("byServer"), dict):
+            d = blob["byServer"].get(_current_server_id()) or []
+        elif isinstance(blob, list):
+            d = blob  # legacy flat until migrate_servers / first save
+        else:
+            d = []
     except Exception: return 0
+    if not isinstance(d, list): d = []
     n = 0
     with lock:
         for o in d:
@@ -545,11 +1055,20 @@ def load_sent():
 
 def load_drafts():
     try:
-        with open(P["drafts"], encoding="utf-8-sig") as f: d = json.load(f)
+        blob = _read_drafts_file()
+        if blob is None: return 0
+        if isinstance(blob, dict) and isinstance(blob.get("byServer"), dict):
+            d = blob["byServer"].get(_current_server_id()) or []
+        elif isinstance(blob, list):
+            d = blob
+        else:
+            d = []
+        n = 0
         with lock:
             for o in d:
-                if isinstance(o, dict) and o.get("id") and o.get("state") == DRAFT: S["orders"][o["id"]] = _upgrade_record(o)
-        return len(d)
+                if isinstance(o, dict) and o.get("id") and o.get("state") == DRAFT:
+                    S["orders"][o["id"]] = _upgrade_record(o); n += 1
+        return n
     except Exception: return 0
 
 # ---------------------------------------------------------------- batches
@@ -890,16 +1409,20 @@ def poll_once():
             if r.get("order"): ost_map[r["order"]] = r.get("orderState") or order_state(r["order"])
         with lock:
             S["robots_raw"] = True
+            # replace (not merge): drop robots absent from the new adapter list
+            prev_all = S["robots"]
+            rebuilt = {}
             for r in rl:
                 name = r["name"]; x, y = r.get("x"), r.get("y"); cur = r.get("order") or ""
-                prev = S["robots"].get(name)
+                prev = prev_all.get(name)
                 moved = prev is None or prev["x"] is None or x is None or abs((x or 0) - (prev["x"] or 0)) + abs((y or 0) - (prev["y"] or 0)) > 0.05
                 ost = ost_map.get(cur, "") if cur else ""
-                S["robots"][name] = {"name": name, "x": x, "y": y, "station": r.get("station", ""), "order": cur,
+                rebuilt[name] = {"name": name, "x": x, "y": y, "station": r.get("station", ""), "order": cur,
                     "orderState": ost, "orderActive": bool(cur) and ost not in TERM,
                     "group": S["robot_group"].get(name) or r.get("group") or "",
                     "dispatchable": r.get("dispatchable"), "connected": r.get("connected"), "blocked": r.get("blocked"),
                     "battery": r.get("battery"), "angle": r.get("angle"), "moved": now if moved else prev["moved"]}
+            S["robots"] = rebuilt
             # vehicle position/heading change also counts as order change
             byveh = {r["name"]: r for r in S["robots"].values()}
             for oid, o in S["orders"].items():

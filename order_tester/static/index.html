@@ -1,33 +1,194 @@
 <!doctype html><html lang="zh"><head><meta charset="utf-8"><title>Order Dispatch Tester</title>
-<style>body{font:13px sans-serif;margin:8px}fieldset{margin:4px 0}table{border-collapse:collapse;width:100%}td,th{border:1px solid #ccc;padding:2px 4px}
-.stuck{background:#fcc}.done{color:#888}#map{display:block;background:#fafafa;cursor:crosshair}#st{height:300px;overflow:auto;border:1px solid #ccc}
-#tabbar{display:flex;gap:4px;align-items:center;border-bottom:2px solid #888;margin-bottom:4px}#tabbar button{padding:4px 14px;border:1px solid #888;border-bottom:none;background:#eee;cursor:pointer}
-#tabbar button.on{background:#fff;font-weight:bold}#run{margin-left:12px;font-size:12px;color:#333;flex:1}.tab{display:none}.tab.on{display:block}
-#rt table{table-layout:fixed}.grp{background:#e8eef5;padding:4px 6px;margin-top:6px;cursor:pointer;font-weight:bold;border:1px solid #bcd}.grp .c{font-weight:normal;margin-left:10px}.dim{color:#999;font-size:11px}
-#maptool{display:flex;flex-wrap:wrap;gap:8px;align-items:center;padding:2px 0}#maptool label{white-space:nowrap}
-.row{display:flex;gap:8px}.row>div{flex:1}.S{color:green;font-weight:bold}.E{color:#c00;font-weight:bold}input[type=number]{width:60px}
-.chip{display:inline-block;margin:1px 2px;padding:0 2px 0 6px;border-radius:10px;font-size:12px;cursor:pointer;border:1px solid}.chip.hl{outline:2px solid #f80}.chip i{font-style:normal;margin-left:3px;padding:0 4px;border-radius:8px;color:#666}.chip i:hover{background:#c00;color:#fff}
-.poolrow{margin:2px 0}.poolrow .pn{display:inline-block;min-width:60px;font-weight:bold}
-#steps td{vertical-align:top}#steps tr.off{opacity:.5}#steps tr.drag{outline:2px dashed #69c}#steps textarea{width:100%;box-sizing:border-box;font:11px monospace}#steps textarea.stargs{min-height:8em;height:9.5em;resize:vertical;font:12px/1.35 Consolas,Menlo,monospace;white-space:pre;tab-size:2}
-.hdl{cursor:grab;user-select:none;color:#888;font-size:16px}#tpl_prev{max-height:340px;overflow:auto;background:#f6f6f6;font-size:11px;margin:0}.err{color:#c00}.ok{color:green}
-#langsel{margin-left:auto}#subbar{display:flex;gap:4px;align-items:center;flex-wrap:wrap;border-bottom:1px solid #69c;padding:2px 0 4px;margin-bottom:4px;position:sticky;top:0;background:#fff;z-index:5}#subbar>button[data-s]{padding:3px 12px;border:1px solid #69c;background:#eef3fa;cursor:pointer}#subbar>button.on{background:#69c;color:#fff;font-weight:bold}#cfgsum{margin-left:12px;font-size:12px}.sub{display:none}.sub.on{display:block}#busy{display:none;position:fixed;inset:0;background:rgba(0,0,0,.45);z-index:9999;align-items:center;justify-content:center;flex-direction:column;color:#fff;font-size:16px;cursor:wait}#busy.on{display:flex}#busy .spin{width:48px;height:48px;border:5px solid rgba(255,255,255,.3);border-top-color:#fff;border-radius:50%;animation:spin 1s linear infinite;margin-bottom:14px}@keyframes spin{to{transform:rotate(360deg)}}#busybar{width:min(420px,80vw);height:10px;background:rgba(255,255,255,.25);border-radius:5px;overflow:hidden;margin-top:12px;display:none}#busy.prog #busybar{display:block}#busyfill{height:100%;width:0;background:#4caf50;transition:width .3s}#busybar.ind #busyfill{width:30%!important;animation:ind 1.2s ease-in-out infinite}@keyframes ind{0%{margin-left:-30%}100%{margin-left:100%}}#busystage{margin-top:8px;font-size:13px;opacity:.9;min-height:1.2em}</style></head><body>
-<div id=tabbar><b style="margin-right:8px" data-i18n=app.title></b><button data-t=cfg onclick="showTab('cfg')" data-i18n=tab.cfg></button><button data-t=map onclick="showTab('map')" data-i18n=tab.map></button><button data-t=rob onclick="showTab('rob')" id=tb_rob></button><button data-t=ord onclick="showTab('ord')" id=tb_ord></button>
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<link rel="icon" href="/static/favicon.svg" type="image/svg+xml">
+<style>
+:root{
+  --bg:#eef1f6; --surface:#ffffff; --surface-2:#f7f9fc; --border:#d8dee8; --border-strong:#b8c2d1;
+  --text:#1e293b; --muted:#64748b; --accent:#3b82f6; --accent-soft:#dbeafe; --accent-hover:#2563eb;
+  --ok:#16a34a; --err:#dc2626; --warn:#d97706; --chip:#e2e8f0;
+  --radius:8px; --radius-sm:6px; --shadow:0 1px 2px rgba(15,23,42,.06),0 1px 3px rgba(15,23,42,.04);
+  --shadow-md:0 2px 8px rgba(15,23,42,.08); --side-w:220px; --side-collapsed:28px;
+  --font:13px/1.45 system-ui,-apple-system,"Segoe UI",Roboto,"PingFang SC","Microsoft YaHei",sans-serif;
+}
+*{box-sizing:border-box}
+html,body{height:100%}
+body{font:var(--font);margin:0;color:var(--text);background:var(--bg);-webkit-font-smoothing:antialiased}
+html.map-fill,body.map-fill{margin:0;height:100%;overflow:hidden}
+body.map-fill #app_body{height:100%;min-height:0}
+body.map-fill #app_main{min-height:0;overflow:hidden}
+body.map-fill #tabbar{flex:0 0 auto;margin:0}
+body.map-fill #tab-map.tab.on{flex:1 1 auto;min-height:0;display:flex;flex-direction:column;margin:0;padding:0 10px 10px;overflow:hidden;background:transparent;border:none;box-shadow:none}
+body.map-fill #maptool{flex:0 0 auto;padding:6px 0}
+body.map-fill #map{flex:1 1 auto;width:100%;min-height:0;height:auto;border-radius:var(--radius);box-shadow:var(--shadow)}
+body.map-fill #srv_side{max-height:none;height:100%;align-self:stretch;position:relative;top:auto}
+
+/* shell: left rail | divider | right */
+#app_body{display:flex;align-items:stretch;min-height:100vh;gap:0}
+#app_main{flex:1;min-width:0;display:flex;flex-direction:column;padding:10px 12px 12px;gap:0}
+#srv_side{
+  width:var(--side-w);flex:0 0 var(--side-w);display:flex;flex-direction:column;
+  background:var(--surface);border-right:1px solid var(--border-strong);
+  box-shadow:2px 0 8px rgba(15,23,42,.04);position:sticky;top:0;
+  align-self:stretch;min-height:100vh;max-height:100vh;
+  transition:width .15s ease,flex-basis .15s ease;z-index:4
+}
+#app_brand{flex:0 0 auto;padding:12px 14px 10px;border-bottom:1px solid var(--border);background:linear-gradient(180deg,#fff 0%,var(--surface-2) 100%)}
+#app_brand b{display:block;font-size:14px;font-weight:700;letter-spacing:.01em;color:var(--text);line-height:1.35}
+#srv_side .srv_hd{padding:8px 12px 6px;font-weight:600;font-size:12px;text-transform:none;color:var(--muted);display:flex;align-items:center;gap:4px;flex:0 0 auto;letter-spacing:.02em}
+#srv_side .srv_hd .lbl{flex:1;min-width:0}
+#srv_list{list-style:none;margin:0;padding:6px;overflow:auto;flex:1;max-height:none}
+#srv_list li{padding:8px 10px;cursor:pointer;border-radius:var(--radius-sm);margin-bottom:4px;border:1px solid transparent;transition:background .12s,border-color .12s,box-shadow .12s}
+#srv_list li:hover{background:var(--accent-soft);border-color:#bfdbfe}
+#srv_list li.on{background:var(--accent);color:#fff;font-weight:600;border-color:var(--accent);box-shadow:var(--shadow)}
+#srv_list li .sn{display:block;font-weight:inherit}
+#srv_list li .sb{display:block;font-size:11px;opacity:.85;font-weight:normal;word-break:break-all;margin-top:2px}
+#srv_list li.on .sb{opacity:.9}
+#srv_side .bar{padding:8px;border-bottom:1px solid var(--border);display:flex;flex-wrap:wrap;gap:6px;flex:0 0 auto;background:var(--surface-2)}
+#srv_side .bar button,#tpl_side .bar button{font-size:12px;padding:4px 8px}
+#srv_edge{
+  position:absolute;top:50%;right:-12px;transform:translateY(-50%);z-index:6;
+  width:20px;height:40px;padding:0;margin:0;border:1px solid var(--border-strong);
+  border-radius:0 8px 8px 0;background:var(--surface);cursor:pointer;font-size:12px;line-height:1;
+  color:var(--accent);box-shadow:var(--shadow-md);transition:background .12s,color .12s,border-color .12s
+}
+#srv_edge:hover{background:var(--accent);color:#fff;border-color:var(--accent)}
+body.srv-collapsed #srv_side{width:var(--side-collapsed);flex:0 0 var(--side-collapsed);overflow:visible;min-height:100vh;max-height:100vh}
+body.srv-collapsed #srv_side #app_brand,
+body.srv-collapsed #srv_side .srv_hd,
+body.srv-collapsed #srv_side .bar,
+body.srv-collapsed #srv_side #srv_list{display:none}
+body.srv-collapsed #srv_edge{right:-1px;border-radius:0 8px 8px 0}
+
+/* right column chrome */
+#tabbar{
+  display:flex;gap:4px;align-items:center;flex-wrap:wrap;
+  margin:0 0 10px;padding:6px 8px;background:var(--surface);border:1px solid var(--border);
+  border-radius:var(--radius);box-shadow:var(--shadow)
+}
+#tabbar button{padding:6px 14px;border:1px solid transparent;border-radius:999px;background:transparent;cursor:pointer;color:var(--muted);font:inherit;transition:background .12s,color .12s,box-shadow .12s}
+#tabbar button:hover{background:var(--surface-2);color:var(--text)}
+#tabbar button.on{background:var(--accent);color:#fff;font-weight:600;box-shadow:0 1px 3px rgba(37,99,235,.35)}
+#run{margin-left:8px;font-size:12px;color:var(--muted);flex:1;min-width:8em}
+#langsel{margin-left:auto;padding:4px 6px;border:1px solid var(--border);border-radius:var(--radius-sm);background:var(--surface);font:inherit}
+.tab{display:none}.tab.on{display:block}
+
+/* panels / forms */
+fieldset{margin:0 0 10px;padding:10px 12px 12px;border:1px solid var(--border);border-radius:var(--radius);background:var(--surface);box-shadow:var(--shadow)}
+fieldset>legend{font-weight:600;padding:0 6px;color:var(--text)}
+table{border-collapse:collapse;width:100%;background:var(--surface)}
+td,th{border:1px solid var(--border);padding:5px 8px;text-align:left}
+th{background:var(--surface-2);font-weight:600;color:var(--muted);font-size:12px}
+tr:nth-child(even) td{background:#fafbfd}
+input,select,textarea{font:inherit;border:1px solid var(--border);border-radius:var(--radius-sm);padding:4px 8px;background:#fff;color:var(--text);transition:border-color .12s,box-shadow .12s}
+input:focus,select:focus,textarea:focus{outline:none;border-color:var(--accent);box-shadow:0 0 0 3px rgba(59,130,246,.2)}
+input[type=number]{width:64px}
+input[type=checkbox]{accent-color:var(--accent)}
+button{
+  font:inherit;padding:5px 11px;border:1px solid var(--border-strong);border-radius:var(--radius-sm);
+  background:linear-gradient(180deg,#fff,#f3f5f8);color:var(--text);cursor:pointer;
+  transition:background .12s,border-color .12s,box-shadow .12s,color .12s
+}
+button:hover{background:#fff;border-color:var(--accent);color:var(--accent-hover);box-shadow:var(--shadow)}
+button:active{transform:translateY(1px)}
+.stuck{background:#fee2e2}.done{color:var(--muted)}
+#map{display:block;background:#fafafa;cursor:crosshair;border:1px solid var(--border);border-radius:var(--radius)}
+#st{height:300px;overflow:auto;border:1px solid var(--border);border-radius:var(--radius-sm);background:var(--surface)}
+#rt table{table-layout:fixed}
+.grp{background:var(--accent-soft);padding:6px 10px;margin-top:8px;cursor:pointer;font-weight:600;border:1px solid #bfdbfe;border-radius:var(--radius-sm)}
+.grp .c{font-weight:normal;margin-left:10px}.dim{color:var(--muted);font-size:11px}
+#maptool{display:flex;flex-wrap:wrap;gap:8px;align-items:center;padding:4px 0}
+#maptool label{white-space:nowrap}
+.row{display:flex;gap:10px}.row>div{flex:1}
+.S{color:var(--ok);font-weight:700}.E{color:var(--err);font-weight:700}
+.chip{display:inline-block;margin:2px;padding:2px 2px 2px 8px;border-radius:999px;font-size:12px;cursor:pointer;border:1px solid var(--border);background:var(--surface-2);transition:box-shadow .12s,border-color .12s}
+.chip:hover{border-color:var(--accent);box-shadow:var(--shadow)}
+.chip.hl{outline:2px solid #f59e0b;outline-offset:1px}
+.chip i{font-style:normal;margin-left:4px;padding:0 5px;border-radius:999px;color:var(--muted)}
+.chip i:hover{background:var(--err);color:#fff}
+.poolrow{margin:4px 0}.poolrow .pn{display:inline-block;min-width:60px;font-weight:700}
+#steps td{vertical-align:top}#steps tr.off{opacity:.5}#steps tr.drag{outline:2px dashed var(--accent)}
+#steps textarea{width:100%;box-sizing:border-box;font:11px monospace}
+#steps textarea.stargs{min-height:8em;height:9.5em;resize:vertical;font:12px/1.35 Consolas,Menlo,monospace;white-space:pre;tab-size:2}
+#steps td:first-child{width:28px;padding:2px}
+#steps td:first-child .act{display:flex;flex-direction:column;align-items:center;gap:2px}
+#steps .hdl,#steps button.up,#steps button.down,#steps button.rm{
+  display:inline-flex;align-items:center;justify-content:center;width:22px;height:22px;padding:0;margin:1px;
+  font-size:13px;line-height:1;box-sizing:border-box;vertical-align:middle;
+  border:1px solid var(--border);background:var(--surface-2);border-radius:4px
+}
+#steps .hdl{cursor:grab;user-select:none;color:var(--muted);border-style:dashed}#steps button.rm{color:var(--err)}
+#tpl_prev{max-height:340px;overflow:auto;background:var(--surface-2);font-size:11px;margin:0;border-radius:var(--radius-sm);padding:8px;border:1px solid var(--border)}
+.err{color:var(--err)}.ok{color:var(--ok)}
+#subbar{
+  display:flex;gap:4px;align-items:center;flex-wrap:wrap;padding:6px 8px;margin-bottom:10px;
+  position:sticky;top:0;background:var(--surface);z-index:5;border:1px solid var(--border);
+  border-radius:var(--radius);box-shadow:var(--shadow)
+}
+#subbar>button[data-s]{padding:5px 12px;border:1px solid var(--border);background:var(--surface-2);cursor:pointer;border-radius:999px;color:var(--muted)}
+#subbar>button[data-s]:hover{border-color:var(--accent);color:var(--accent-hover)}
+#subbar>button.on{background:var(--accent);color:#fff;font-weight:600;border-color:var(--accent)}
+#cfgsum{margin-left:12px;font-size:12px;color:var(--muted)}
+.sub{display:none}.sub.on{display:block}
+#busy{display:none;position:fixed;inset:0;background:rgba(15,23,42,.5);z-index:9999;align-items:center;justify-content:center;flex-direction:column;color:#fff;font-size:16px;cursor:wait;backdrop-filter:blur(2px)}
+#busy.on{display:flex}
+#busy .spin{width:48px;height:48px;border:5px solid rgba(255,255,255,.25);border-top-color:#fff;border-radius:50%;animation:spin 1s linear infinite;margin-bottom:14px}
+@keyframes spin{to{transform:rotate(360deg)}}
+#busybar{width:min(420px,80vw);height:10px;background:rgba(255,255,255,.25);border-radius:5px;overflow:hidden;margin-top:12px;display:none}
+#busy.prog #busybar{display:block}#busyfill{height:100%;width:0;background:#4ade80;transition:width .3s}
+#busybar.ind #busyfill{width:30%!important;animation:ind 1.2s ease-in-out infinite}
+@keyframes ind{0%{margin-left:-30%}100%{margin-left:100%}}
+#busystage{margin-top:8px;font-size:13px;opacity:.9;min-height:1.2em}
+#tpl_layout{display:flex;gap:10px;align-items:stretch;min-height:280px}
+#tpl_side{width:200px;flex:0 0 200px;border:1px solid var(--border);display:flex;flex-direction:column;background:var(--surface-2);border-radius:var(--radius);overflow:hidden;box-shadow:var(--shadow)}
+#tpl_list{list-style:none;margin:0;padding:4px;overflow:auto;flex:1;max-height:60vh}
+#tpl_list li{padding:6px 10px;cursor:pointer;border-radius:var(--radius-sm);margin-bottom:2px}
+#tpl_list li:hover{background:var(--accent-soft)}
+#tpl_list li.on{background:var(--accent);color:#fff;font-weight:600}
+#tpl_side .bar{padding:6px;border-bottom:1px solid var(--border);display:flex;flex-wrap:wrap;gap:4px;background:var(--surface)}
+#tpl_main{flex:1;min-width:0}
+#steps.no-vs .vs-col{display:none}
+#steps tr.om-bin .stargs,#steps tr.om-bin .argerr{display:none}
+#steps tr.om-bin td.stargs-td::after{content:"—";color:var(--muted);font-size:12px}
+#cfg_main{min-width:0}
+#m4box{background:var(--surface-2)!important;border-radius:var(--radius-sm)!important;border-color:var(--border)!important}
+details{margin:6px 0}summary{cursor:pointer;color:var(--accent-hover)}
+#ver_footer{
+  position:fixed;left:10px;bottom:8px;z-index:50;
+  pointer-events:none;user-select:none;
+  font-size:11px;line-height:1.3;color:var(--muted);
+  opacity:.85;text-shadow:0 0 4px var(--bg),0 0 2px var(--bg);
+}
+</style></head><body>
+<div id=app_body>
+<div id=srv_side>
+ <div id=app_brand><b data-i18n=app.title></b></div>
+ <div class=srv_hd><span class=lbl data-i18n=srv.list></span></div>
+ <div class=bar>
+  <button onclick=addServer() data-i18n=srv.add></button>
+  <button onclick=renameServer() data-i18n=srv.rename></button>
+  <button onclick=delServer() data-i18n=srv.del></button>
+ </div>
+ <ul id=srv_list></ul>
+ <button type=button id=srv_edge onclick=toggleSrvSide() aria-label="toggle server list" data-i18n-title=srv.toggleTip>«</button>
+</div>
+<div id=app_main>
+<div id=tabbar><button data-t=cfg onclick="showTab('cfg')" data-i18n=tab.cfg></button><button data-t=map onclick="showTab('map')" data-i18n=tab.map></button><button data-t=rob onclick="showTab('rob')" id=tb_rob></button><button data-t=ord onclick="showTab('ord')" id=tb_ord></button>
 <input type=hidden id=tab value=cfg><span id=run></span><select id=langsel onchange=setLang(this.value) title="Language / 语言"><option value=zh>中文</option><option value=en>English</option></select></div>
 <div id=tab-cfg class=tab>
+<div id=cfg_main>
 <div id=subbar><button data-s=conn onclick="showSub('conn')" data-i18n=sub.conn></button><button data-s=pool onclick="showSub('pool')" data-i18n=sub.pool></button><button data-s=tpl onclick="showSub('tpl')" data-i18n=sub.tpl></button><button data-s=gen onclick="showSub('gen')" data-i18n=sub.gen></button>
  <span id=cfgsum></span> <button onclick=generate() style="background:#cfc" data-i18n=gen.btn></button> <span id=genmsg2></span></div>
 <fieldset class=sub data-sub=conn><legend data-i18n=cfg.legend></legend><span data-i18n=cfg.base></span> <input id=base size=28 value="http://127.0.0.1:8088"> <span data-i18n=cfg.poll></span> <input id=poll type=number value=2>
  <span data-i18n=cfg.stuck></span> <input id=stuck type=number value=60> <span data-i18n=cfg.still></span> <input id=still type=number value=60>
- <button onclick=saveCfg() data-i18n=btn.save></button> <span class=dim id=adapterinfo></span>
+
  <div id=adbox><span data-i18n=cfg.adapterSel></span> <select id=adsel onchange=setAdapter(this.value)><option value=rds>RDS</option><option value=m4>M4</option></select> <small class=dim data-i18n=cfg.adapterHint></small>
- <div id=m4box style="display:none;margin:4px 0;padding:4px;border:1px dashed #aaa"><b data-i18n=m4.title></b> <span data-i18n=m4.profile></span> <select id=m4prof onchange=m4Show(this.value)></select> <input id=m4name size=10 data-i18n-ph=m4.profileName>
- <span data-i18n=m4.base></span> <input id=m4base size=26 placeholder="http://&lt;m4-host&gt;:&lt;port&gt;"> <span data-i18n=m4.scene></span> <input id=m4scene size=16> <select id=m4scenes onchange="if(this.value)$('m4scene').value=this.value"></select> <button onclick=m4Test() data-i18n=m4.btnTest></button><br>
- <span data-i18n=m4.auth></span> <select id=m4auth><option value="" data-i18n=m4.authAuto></option><option value=appkey data-i18n=m4.authKey></option><option value=login data-i18n=m4.authLogin></option><option value=none data-i18n=m4.authNone></option></select>
- <span data-i18n=m4.appId></span> <input id=m4appid size=12 autocomplete=off> <span data-i18n=m4.appKey></span> <input id=m4appkey type=password size=12 autocomplete=new-password>
- <span data-i18n=m4.user></span> <input id=m4user size=10 autocomplete=off> <span data-i18n=m4.pass></span> <input id=m4pass type=password size=10 autocomplete=new-password>
- <span data-i18n=m4.opMode></span> <select id=m4op><option value=binTask>binTask</option><option value=operation>operation</option></select>
- <button onclick=m4Save() data-i18n=m4.btnSave></button> <button onclick=m4Del() data-i18n=m4.btnDel></button> <span id=m4msg></span><br><small class=dim data-i18n=m4.hint></small></div></div>
- <span data-i18n=cfg.lang></span> <select id=langsel2 onchange=setLang(this.value)><option value=zh>中文</option><option value=en>English</option></select> <span id=info></span></fieldset>
+ <div id=m4box style="display:none;margin:4px 0;padding:4px;border:1px dashed #aaa"><b data-i18n=m4.title></b>
+ <span data-i18n=m4.scene></span> <select id=m4scenes></select> <button onclick=m4Test() data-i18n=m4.btnTest></button><br>
+ <span data-i18n=m4.auth></span> <select id=m4auth onchange=m4AuthUi()><option value=appkey data-i18n=m4.authKey></option><option value=login data-i18n=m4.authLogin></option></select> <span id=m4authKey><span data-i18n=m4.appId></span> <input id=m4appid size=12 autocomplete=off> <span data-i18n=m4.appKey></span> <input id=m4appkey type=password size=12 autocomplete=new-password></span><span id=m4authLogin><span data-i18n=m4.user></span> <input id=m4user size=10 autocomplete=off> <span data-i18n=m4.pass></span> <input id=m4pass type=password size=10 autocomplete=new-password></span>
+
+ <span id=m4msg></span><br><small class=dim data-i18n=m4.hint></small></div></div>
+ <div style="margin-top:8px"><button onclick=saveCfg() data-i18n=btn.save></button> <span class=dim id=adapterinfo></span></div>
+ <span id=info></span></fieldset>
 <fieldset class=sub data-sub=pool><legend data-i18n=st.legend></legend><button onclick=loadSt() data-i18n=st.load></button>
  <span data-i18n=st.search></span> <input id=q oninput=renderSt() size=12> <span data-i18n=st.type></span> <input id=tf oninput=renderSt() size=6 placeholder="AP/LM">
  <details><summary data-i18n=st.paste></summary><textarea id=paste rows=3 cols=40></textarea><button onclick=usePaste() data-i18n=btn.use></button></details>
@@ -42,27 +203,42 @@
  <label><input type=checkbox id=noself checked onchange=renderPool()><span data-i18n=gen.noself></span></label>
  <label id=noreuse_l><input type=checkbox id=noreuse checked onchange=renderPool()><span data-i18n=gen.noreuse></span></label></fieldset>
 <fieldset class=sub data-sub=tpl style="border:2px solid #69c"><legend><b data-i18n=tpl.legend></b></legend>
- <span data-i18n=tpl.active></span> <select id=tpl_sel onchange=selectTpl(this.value)></select>
- <button onclick=newTpl() data-i18n=tpl.new></button> <button onclick=copyTpl() data-i18n=tpl.copy></button> <button onclick=delTpl() data-i18n=tpl.del></button>
- <button onclick="$('tpl_imp').click()" data-i18n=tpl.import></button><input type=file id=tpl_imp accept=".json" style=display:none onchange=importTpl()> <button onclick=exportTpl() data-i18n=tpl.export></button>
- | <label><input type=checkbox id=tpl_raw onchange=toggleRaw()><span data-i18n=tpl.raw></span></label> <span id=tpl_status></span><br>
- <span data-i18n=tpl.title></span> <input id=tpl_title size=60 oninput="cur.title=this.value;tplChanged()">
- <div id=tpl_form><table id=steps><thead><tr><th></th><th>#</th><th data-i18n=step.on></th><th data-i18n=step.id></th><th data-i18n=step.name></th><th data-i18n=step.loc></th><th data-i18n=step.op></th><th style="width:34%" data-i18n=step.args></th><th>variableShape<br><span class=dim>head / tail (m)</span></th><th></th></tr></thead><tbody></tbody></table>
- <button onclick=addStep() data-i18n=step.add></button> <span class=dim data-i18n=step.varHint></span></div>
- <div id=tpl_rawbox style=display:none><textarea id=tpl_json rows=22 style="width:100%;font:12px monospace" oninput=rawChanged()></textarea></div>
- <details open><summary data-i18n=tpl.preview></summary><span id=prev_info class=dim></span><pre id=tpl_prev></pre></details></fieldset>
+<div id=tpl_layout>
+ <div id=tpl_side>
+  <div class=bar>
+   <button onclick=newTpl() data-i18n=tpl.new></button>
+   <button onclick=copyTpl() data-i18n=tpl.copy></button>
+   <button onclick=delTpl() data-i18n=tpl.del></button>
+   <button onclick="$('tpl_imp').click()" data-i18n=tpl.import></button>
+   <input type=file id=tpl_imp accept=".json" style=display:none onchange=importTpl()>
+   <button onclick=exportTpl() data-i18n=tpl.export></button>
+  </div>
+  <ul id=tpl_list></ul>
+ </div>
+ <div id=tpl_main>
+  <span data-i18n=tpl.name></span> <input id=tpl_name size=24 onchange=renameTpl()>
+  <span id=tpl_status></span><br>
+  <span data-i18n=tpl.title></span> <input id=tpl_title size=50 oninput="cur.title=this.value;tplChanged()">
+  <div id=tpl_form><table id=steps><thead><tr><th></th><th>#</th><th data-i18n=step.on></th><th data-i18n=step.id></th><th data-i18n=step.name></th><th data-i18n=step.loc></th><th data-i18n=step.mode></th><th data-i18n=step.action></th><th style="width:28%" data-i18n=step.args></th><th class=vs-col><span data-i18n=step.vs></span><br><span class=dim>head / tail (m)</span></th></tr></thead><tbody></tbody></table>
+  <button onclick=addStep() data-i18n=step.add></button> <span class=dim data-i18n=step.varHint></span></div>
+  <label><input type=checkbox id=tpl_raw onchange=toggleRaw()><span data-i18n=tpl.raw></span></label>
+  <div id=tpl_rawbox style=display:none><textarea id=tpl_json rows=22 style="width:100%;font:12px monospace" oninput=rawChanged()></textarea></div>
+  <details><summary data-i18n=tpl.preview></summary><span id=prev_info class=dim></span><pre id=tpl_prev></pre></details>
+ </div>
+</div></fieldset>
 <fieldset class=sub data-sub=gen><legend data-i18n=disp.legend></legend><span data-i18n=disp.group></span> <select id=grp data-i18n-title=disp.groupTip><option value="" data-i18n=disp.none></option></select> <span data-i18n=disp.veh></span> <input id=veh data-i18n-ph=disp.vehPh size=14> <span data-i18n=disp.pri></span> <input id=pri type=number value=1>
  <span data-i18n=disp.label></span> <input id=label size=14 placeholder="empty-pallet">
  <label data-i18n-title=disp.bbbTip><input type=checkbox id=bbb> <span data-i18n=disp.bbb></span></label> <span data-i18n=disp.bbbPoll></span> <input id=bbb_poll type=number value=1 min=0.2 step=0.1 style="width:4em">
+
  <div class=row><div><span data-i18n=disp.preov></span><br><textarea id=pre_ov rows=4 cols=40 placeholder="AP12=LM12&#10;AP13=LM13|LM14" oninput="renderPool();renderSt();prevLater()"></textarea><div id=pre_err class=err style="white-space:pre-line"></div></div><div><span id=pre_info></span></div></div>
  <span data-i18n=gen.count></span> <input id=cnt type=number value=9 oninput="$('cnt_auto').value='0';renderPool()"><input type=hidden id=cnt_auto value=1> <button onclick="$('cnt_auto').value='1';renderPool()" data-i18n=gen.countAuto data-i18n-title=gen.countAutoTip></button> <button onclick=generate() style="background:#cfc" data-i18n=gen.btn></button> <span class=dim data-i18n=gen.hint></span> <span id=genmsg></span></fieldset>
-</div>
+</div><!--cfg_main-->
+</div><!--tab-cfg-->
 <div id=tab-map class=tab><div id=maptool>
  <span data-i18n=map.layers></span> <label><input type=checkbox id=ly_pc checked onchange=draw()><span data-i18n=map.pc></span></label><select id=pcsize onchange=draw() data-i18n-title=map.pcSizeTip><option value=1 data-i18n=map.pcThin></option><option value=2 data-i18n=map.pcMed></option><option value=3 data-i18n=map.pcBold></option><option value=4 data-i18n=map.pcXBold></option></select> <label><input type=checkbox id=ly_rt checked onchange=draw()><span data-i18n=map.rt></span></label>
  <label><input type=checkbox id=ly_st checked onchange=draw()><span data-i18n=map.st></span></label><label><input type=checkbox id=ly_dir checked onchange=draw()><span data-i18n=map.dir></span></label><label><input type=checkbox id=ly_rb checked onchange=draw()><span data-i18n=map.rb></span></label>
  <button onclick=fitAll() data-i18n=map.fit></button>
  | <span data-i18n=map.click></span> <span id=pm_box></span>
- | <span data-i18n=map.upload></span> <input type=file id=smapf accept=".smap,.json" onchange=uploadSmap()> <span data-i18n=map.orPath></span> <input id=smap_path size=28 placeholder="D:\maps\xxx.smap"><button onclick=useSmapPath() data-i18n=btn.use></button>
  <span id=geominfo></span> <span id=mapsum></span></div>
 <canvas id=map width=800 height=500></canvas></div>
 <div id=tab-rob class=tab>
@@ -81,5 +257,8 @@
  <button onclick=clearFilt() data-i18n=f.clear></button> <span id=f_info class=dim></span>
  | <button onclick="grpCollapseAll(false)" data-i18n=btn.expandAll></button> <button onclick="grpCollapseAll(true)" data-i18n=btn.collapseAll></button></fieldset>
  <span id=sum></span><table id=ot></table></div>
+</div><!--app_main-->
+</div><!--app_body-->
+<div id=ver_footer aria-hidden=true></div>
 <div id=busy role=alert aria-busy=true><div class=spin></div><div id=busytxt></div><div id=busybar><div id=busyfill></div></div><div id=busystage></div></div><script src="/static/app.js"></script>
 </body></html>

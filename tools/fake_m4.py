@@ -3,7 +3,8 @@
 Auth: headers xyy-app-id/xyy-app-key = APP_ID/APP_KEY, or POST /api/sign-in {username, password} = USER/PASSWORD
 (sets a session cookie). Unauthenticated requests -> 401; wrong sign-in -> 400 {code, message}.
 Scene "scene-1" ("Mock scene"): points AP1..AP12 + LM1..LM12, paths LMn->APn, bins BIN-n on APn, robot group grpA
-(AMB-01, AMB-02). Unknown fields are sprinkled in on purpose (the parser must ignore them).
+(AMB-01, AMB-02), groupsMap mapFile for /api/fleet/scenes/{id}/download/{mapFile}. Unknown fields are sprinkled in on purpose
+(the parser must ignore them). SCHEMA_CLOUD=False omits normalPosList so tests can exercise map download.
 Orders: steps run one after another, STEP_DUR s each (a step starts when it exists and its predecessor is Done).
 Status: ToBeAllocated -> Executing -> Pending (all steps done, not sealed: stepFixed=false) -> Done (sealed).
 Like the doc example, stepIndex is returned as a string and rbkArgs as JSON text.
@@ -19,6 +20,10 @@ APP_ID, APP_KEY, USER, PASSWORD = "mock-app", "mock-key", "mockuser", "mockpass"
 AUTH = True
 SCENE_ID = "scene-1"
 STEP_DUR = 0.4; CANCEL_DUR = 0.3
+SCHEMA_CLOUD = True  # False: omit normalPosList so core must use map download
+MAP_FILE = "robot-maps/mock.smap"
+MAP_NAME = "mock.smap"
+DOWNLOAD_MAP = b""  # bytes served by /api/fleet/scenes/{id}/download/{mapFile}; empty -> 404
 ORDERS = {}; LOCK = threading.Lock(); RECEIVED = []; EVENTS = []; SESSIONS = set()
 
 def schema():
@@ -26,12 +31,29 @@ def schema():
     for i in range(1, 13):
         pts.append({"name": "AP%d" % i, "type": "ActionPoint", "x": i * 2.0, "y": 0.0, "dir": 1.5707963 if i % 2 else None, "mysteryField": {"a": 1}})
         pts.append({"name": "LM%d" % i, "type": "LocationMark", "x": i * 2.0, "y": 2.0, "zz": [1, 2]})
-        paths.append({"fromPointName": "LM%d" % i, "toPointName": "AP%d" % i, "curveType": "Straight", "unknown": True})
+        if i <= 2:
+            # Bezier with control point — tessellation must produce more than 2 vertices
+            paths.append({"fromPointName": "LM%d" % i, "toPointName": "AP%d" % i, "curveType": "BezierPath",
+                          "controlPos1": {"x": i * 2.0 + 1.0, "y": 1.0}, "unknown": True})
+        elif i == 3:
+            # RDS-shaped path embedded in mergedMap.paths (className + startPos/endPos/controlPos)
+            paths.append({"className": "DegenerateBezierPath", "instanceName": "LM3-AP3",
+                          "startPos": {"instanceName": "LM3", "pos": {"x": 6.0, "y": 2.0}},
+                          "endPos": {"instanceName": "AP3", "pos": {"x": 6.0, "y": 0.0}},
+                          "controlPos1": {"x": 7.0, "y": 1.0}})
+        else:
+            paths.append({"fromPointName": "LM%d" % i, "toPointName": "AP%d" % i, "curveType": "Straight", "unknown": True})
         bins.append({"name": "BIN-%d" % i, "pointName": "AP%d" % i, "layer": 0})
+    # Point cloud like RDS normalPosList (must not be confused with map station points)
+    cloud = [{"x": (i % 20) * 0.25, "y": (i // 20) * 0.25} for i in range(200)]
+    mm = {"points": pts, "paths": paths, "bins": bins, "zones": [], "newThing": {}, "sourceMaps": [MAP_NAME]}
+    if SCHEMA_CLOUD: mm["normalPosList"] = cloud
+    area0 = {"id": 0, "name": "Area-1", "mergedMap": mm,
+             "groupsMap": {"0": {"mapName": MAP_NAME, "mapFile": MAP_FILE, "mapMd5": "deadbeef"}}}
     return {"id": SCENE_ID, "basic": {"id": SCENE_ID, "name": "Mock scene", "version": 3},
             "structure": {"robotGroups": [{"id": 0, "name": "grpA", "fork": True, "futureField": "x"}],
                           "robots": [{"robotName": "AMB-01", "groupId": 0}, {"robotName": "AMB-02", "groupId": 0}],
-                          "areas": [{"id": 0, "name": "Area-1", "mergedMap": {"points": pts, "paths": paths, "bins": bins, "zones": [], "newThing": {}}},
+                          "areas": [area0,
                                     {"id": 1, "name": "Disabled", "disabled": True, "mergedMap": {"points": [{"name": "AP99", "x": 0, "y": 0}]}}],
                           "lifts": [], "somethingNew": 42}}
 
@@ -115,6 +137,15 @@ class H(BaseHTTPRequestHandler):
                                        "blocked": False, "groupName": "grpA", "orders": [cur] if cur else [], "cmdStatus": "Moving" if cur else "Idle", "raw": {"x": 1}},
                             "AMB-02": {"name": "AMB-02", "online": True, "disabled": False, "offDuty": True, "x": 5.0, "y": 0.5, "d": 1.0, "p": "AP3", "battery": 0.6,
                                        "blocked": False, "groupName": "grpA", "orders": [], "cmdStatus": "Idle"}})
+        # Same URL shape as M4 UI: /api/fleet/scenes/{sceneId}/download/{mapFile}
+        pref = "/api/fleet/scenes/"
+        if p.startswith(pref) and "/download/" in p:
+            rest = p[len(pref):]; sid, _, mpath = rest.partition("/download/")
+            if sid != SCENE_ID: return self.err("scene not found")
+            if not DOWNLOAD_MAP: self.send_response(404); self.end_headers(); return
+            b = DOWNLOAD_MAP
+            self.send_response(200); self.send_header("Content-Type", "application/zip")
+            self.send_header("Content-Length", str(len(b))); self.end_headers(); self.wfile.write(b); return
         self.err("not found", 404)
     def do_POST(self):
         n = int(self.headers.get("Content-Length") or 0)

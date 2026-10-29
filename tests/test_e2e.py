@@ -174,6 +174,8 @@ class E2ETest(unittest.TestCase):
             o = C.S["orders"][oid]; self.assertEqual(o["state"], "FAILED"); self.assertTrue(C.is_active(o)); self.assertNotIn("ended", o)
         finally: fake_rds.state_of = orig
         self.assertTrue(call(p, "/api/template_delete", {"name": "fail_tpl"})["ok"])
-        self.assertFalse(call(p, "/api/template_delete", {"name": "default"})["ok"])  # last one
+        # empty store is allowed (per-server); deleting the last template succeeds
+        self.assertTrue(call(p, "/api/template_delete", {"name": "default"})["ok"])
+        self.assertEqual(call(p, "/api/templates")["names"], [])
 
 if __name__ == "__main__": unittest.main()

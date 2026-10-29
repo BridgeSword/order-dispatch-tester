@@ -2,7 +2,7 @@
 """HTTP server (stdlib). python -m order_tester [--port 5088] [--rds URL] [--data DIR] [--adapter rds]"""
 import argparse, json, os, sys, threading, time, urllib.parse
 from http.server import ThreadingHTTPServer, BaseHTTPRequestHandler
-from . import core as C, templates as T, i18n
+from . import core as C, templates as T, i18n, version as V
 from .core import S, lock, DRAFT
 
 STATIC = os.path.join(os.path.dirname(os.path.abspath(__file__)), "static")
@@ -27,14 +27,22 @@ class H(BaseHTTPRequestHandler):
             v = str(int(max(os.path.getmtime(os.path.join(STATIC, n)) for n in os.listdir(STATIC))))
             html = html.replace(b'/static/app.js"', b'/static/app.js?v=' + v.encode() + b'"')
             return self.send(html, ctype="text/html; charset=utf-8", extra={"Cache-Control": "no-store"})
-        if path == "/favicon.ico": return self.send(b"", 204, ctype="image/x-icon")
+        if path == "/favicon.ico":
+            fp = os.path.join(STATIC, "favicon.svg")
+            if os.path.isfile(fp):
+                with open(fp, "rb") as f: return self.send(f.read(), ctype="image/svg+xml")
+            return self.send(b"", 204, ctype="image/x-icon")
         if path.startswith("/static/"):
             fn = os.path.basename(path)
             fp = os.path.join(STATIC, fn)
             if fn and os.path.isfile(fp):
-                ct = {"js": "application/javascript", "css": "text/css", "html": "text/html"}.get(fn.rsplit(".", 1)[-1], "application/octet-stream")
-                with open(fp, "rb") as f: return self.send(f.read(), ctype=ct + "; charset=utf-8", extra={"Cache-Control": "no-store"})
+                ct = {"js": "application/javascript", "css": "text/css", "html": "text/html", "svg": "image/svg+xml", "png": "image/png", "ico": "image/x-icon"}.get(fn.rsplit(".", 1)[-1], "application/octet-stream")
+                with open(fp, "rb") as f:
+                    ctype = ct if ct.startswith("image/") else (ct + "; charset=utf-8")
+                    return self.send(f.read(), ctype=ctype, extra={"Cache-Control": "no-store"})
             return self.send({"err": "not found"}, 404)
+        if path == "/api/version":
+            return self.send({"ok": True, "version": V.VERSION, "buildDate": V.BUILD_DATE})
         if path == "/api/i18n":
             lang = self.q().get("lang") or C.load_settings().get("lang") or "zh"
             return self.send({"lang": lang if lang in i18n.LANGS else "zh", "langs": list(i18n.LANGS), "t": i18n.table(lang)})
@@ -56,10 +64,11 @@ class H(BaseHTTPRequestHandler):
             o = S["orders"].get(self.q().get("id", ""))
             return self.send({"ok": bool(o), "body": o and o.get("body")})
         if path == "/api/settings": return self.send(C.masked_settings())  # M4 secrets masked
+        if path == "/api/servers": return self.send(dict(C.servers_list(), ok=True))
         if path == "/api/m4": return self.send(dict(C.m4_masked(), adapter=C.AD().name, adapters=sorted(C.ADAPTERS)))
         if path == "/api/templates":
             st = S["store"]
-            return self.send({"ok": True, "names": st.names(), "active": C.load_settings().get("activeTemplate") or "default",
+            return self.send({"ok": True, "names": st.names(), "active": C.load_settings().get("activeTemplate") or "",
                               "templates": {n: st.get(n) for n in st.names()}, "builtin": T.builtin_default(),
                               "strategies": list(T.STRATEGIES), "adapter": C.AD().name})
         if path == "/api/state":
@@ -109,6 +118,32 @@ class H(BaseHTTPRequestHandler):
             ad = M4Adapter(prof["base"], C.log, prof)
             ok, info = ad.ping(); sc = ad.scenes() if ok else None
             return self.send({"ok": ok, "auth": ad.auth_mode(), "ping": info if ok else str(info)[:200], "scenes": sc})
+        if path == "/api/servers/select":
+            ok, info = C.select_server(b.get("id") or "")
+            if not ok: return self.send({"ok": False, "err": info})
+            C.log("server_select", id=info)
+            return self.send({"ok": True, "currentServerId": info, "settings": C.masked_settings()})
+        if path == "/api/servers/add":
+            activate = b.get("activate", True)
+            # new servers always RDS (ignore client adapter); user may switch later
+            sid = C.add_server(b.get("name"), b.get("base"), "rds", activate=False)
+            if not sid:
+                return self.send({"ok": False, "err": C.msg("srv.nameRequired")})
+            if activate:
+                C.select_server(sid)
+            C.log("server_add", id=sid)
+            return self.send({"ok": True, "id": sid, "settings": C.masked_settings(), **C.servers_list()})
+        if path == "/api/servers/rename":
+            if not C.rename_server(b.get("id") or "", b.get("name") or ""):
+                return self.send({"ok": False, "err": "rename failed"})
+            C.log("server_rename", id=b.get("id"), name=b.get("name"))
+            return self.send({"ok": True, **C.servers_list()})
+        if path == "/api/servers/delete":
+            ok, info = C.delete_server(b.get("id") or "")
+            if not ok: return self.send({"ok": False, "err": info})
+            C.select_server(info, force=True)
+            C.log("server_delete", id=b.get("id"), current=info)
+            return self.send({"ok": True, "currentServerId": info, "settings": C.masked_settings(), **C.servers_list()})
         if path == "/api/config":
             C.set_base(b.get("base")); S["cfg"]["pollSec"] = b.get("pollSec", S["cfg"].get("pollSec", 2))
             part = dict(b.get("settings") or {})
@@ -130,8 +165,17 @@ class H(BaseHTTPRequestHandler):
             try: S["store"].delete(b.get("name") or "")
             except (ValueError, OSError) as e: return self.send({"ok": False, "err": str(e)})
             st = C.load_settings()
-            if st.get("activeTemplate") == b.get("name"): C.save_settings({"activeTemplate": S["store"].names()[0]})
+            if st.get("activeTemplate") == b.get("name"):
+                names = S["store"].names()
+                C.save_settings({"activeTemplate": names[0] if names else ""})
             C.log("template_delete", name=b.get("name")); return self.send({"ok": True})
+        if path == "/api/template_rename":
+            old, new = b.get("old") or "", b.get("new") or ""
+            try: t = S["store"].rename(old, new, overwrite=bool(b.get("overwrite")))
+            except (ValueError, OSError) as e: return self.send({"ok": False, "err": str(e)})
+            st = C.load_settings()
+            if st.get("activeTemplate") == old or b.get("activate"): C.save_settings({"activeTemplate": new})
+            C.log("template_rename", old=old, new=new); return self.send({"ok": True, "template": t})
         if path == "/api/template_validate":
             t = b.get("template"); errs = T.validate(t) if isinstance(t, dict) else ["not an object"]
             return self.send({"ok": not errs, "errors": errs, "template": t})
@@ -207,6 +251,7 @@ def main(argv=None):
     if sys.stdout is None or sys.stderr is None:  # pythonw: no console
         sys.stdout = sys.stderr = open(os.path.join(C.P["logs"], "server_console.log"), "a", encoding="utf-8", buffering=1)
     try:
+        for n in C.migrate_servers(): print("migration:", n, flush=True)
         if C.migrate_vs_settings(): print("settings: migrated variableShape to vsPerBlock", flush=True)
         for n in C.migrate_templates(): print("migration:", n, flush=True)
     except Exception as e: print("migration error:", e, flush=True)

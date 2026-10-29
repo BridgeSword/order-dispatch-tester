@@ -22,20 +22,32 @@ class RdsAdapter(DispatcherAdapter):
     terminal_states = frozenset({"FINISHED", "STOPPED", "MANUAL_FINISHED", "CANCELED", "CANCELLED", "WITHDRAWN", "TERMINATED", "SKIPPED"})
 
     # ------------------------------------------------------------ payload
+    @staticmethod
+    def step_mode(st):
+        """Per-step binTask|operation. Prefer step.opMode, then legacy args.m4Mode, else operation (RDS legacy)."""
+        args = st.get("args") if isinstance(st.get("args"), dict) else {}
+        m = st.get("opMode") or args.get("m4Mode") or "operation"
+        return m if m in ("binTask", "operation") else "operation"
+
     def build_payload(self, order):
         oid = order["id"]; blocks = []
         for st in order["steps"]:
             b = {"blockId": oid + st["suffix"], "location": st["location"]}
             op = st.get("operation")
-            args = st.get("args") if isinstance(st.get("args"), dict) else {}
+            args = dict(st.get("args") if isinstance(st.get("args"), dict) else {})
+            args.pop("m4Mode", None); args.pop("m4BinTask", None)  # adapter hints, not sent
+            mode = self.step_mode(st)
             if op == "Script":
                 rest = {k: v for k, v in args.items() if k not in ("script_name", "script_args")}
                 b["operation"] = "Script"; b["operation_args"] = rest
                 b["script_name"] = args.get("script_name", "")
                 b["script_args"] = args.get("script_args", {})
             elif op and op != "none":
-                b["operation"] = op; b["operation_args"] = args
-                if "recognize" in args: b["recognize"] = args["recognize"]
+                b["operation"] = op
+                if mode == "operation":
+                    b["operation_args"] = args
+                    if "recognize" in args: b["recognize"] = args["recognize"]
+                # binTask: action name only — omit operation_args
             blocks.append((b, st))
         for b, st in blocks:
             if isinstance(st.get("variableShape"), dict): b["variableShape"] = st["variableShape"]

@@ -11,7 +11,7 @@
 - Requirements: Python 3.8+, standard library only.
 - Start: `python run.py --port 5088 --rds http://<rds-host>:8088`, then open <http://127.0.0.1:5088> in a browser.
   - Options: `--port`, `--host` (default 127.0.0.1), `--rds/--base` dispatcher URL, `--data DIR` data directory (default: the project directory, or the environment variable `ORDER_TESTER_DATA`), `--adapter` (default `rds`).
-  - Data directory contents: `settings.json`, `drafts.json`, `sent_orders.json`, `scene_cache.json` (the last successfully loaded scene), `templates/`, `logs/`, `maps/`.
+  - Data directory contents: `settings.json` (with a `servers` list and `currentServerId`; only `lang` is global), `drafts.json` / `scene_cache.json` / `sent_orders.json` (bucketed by server id), `templates/` (shared library; **which template is active** is per server), `logs/`, `maps/`.
 - Windows: double-click `start_tester.bat` (runs in the background with `pythonw` and opens the browser; if `pythonw.exe` is not on PATH, set the environment variable `PYW`).
 - The dispatcher address saved in the page (written to `settings.json`) takes precedence over the `--rds` startup option.
 - Updating a deployment: replace the program files (back them up first) → stop the old `run.py --port 5088` process → start it again in the background with `pythonw run.py --port 5088` → open the home page and confirm it returns 200. The data directory (templates, station pools, orders) is not affected.
@@ -22,11 +22,15 @@
 The sub-tabs at the top switch between pages; the current sub-tab is remembered in the browser's localStorage. Every sub-tab shows a persistent **summary** line at the top: current template · number of stations in each pool in use · strategy · planned order count (format: `Template {tpl} · {pools} · {strat} · {n} orders planned`), with a **Generate orders** (生成运单) button next to it (the same button as on the 4th sub-tab).
 
 ### 2.1 Connection (连接)
-- Dispatcher URL (调度系统地址), Poll interval (s) (轮询间隔(秒)), Stuck threshold (s) (卡死阈值(秒)), Vehicle idle threshold (s) (车辆静止阈值(秒)), Dispatcher adapter (调度适配器), Language (界面语言) (Chinese/English, kept in sync with the top-right switch).
-- **Dispatcher** (调度系统): `RDS` (default) or `M4`. Switching takes effect immediately and is saved in the local `settings.json`. RDS keeps using **Dispatcher URL**; M4 uses the URL of the selected M4 profile. See "M4 dispatcher" below.
+- **Global left server list**: a shared rail on the left of every main tab (Config & Dispatch / Map / Robots / Test Orders); the **app title** (Order Dispatch Tester) sits at the top of that same left rail (same width as the server list), with a vertical divider separating it from the tab bar and main content on the right. Each entry is an independent parameter set (URL, adapter, station pools, active template, dispatch options, M4 auth/scene, etc.). Click a row to switch the active server; the content of the current tab reloads for that server's parameters. Save writes to the **currently selected** server only and does not clobber others.
+  - **Add / Rename / Delete**: delete asks for confirmation; at least one server must remain. A new server requires a non-empty name and starts with empty defaults (empty URL / pools / test orders & drafts; fill the URL then save), and is seeded with the built-in `default` order template as the active template; `sent_orders.json` is bucketed per server so switching or adding never mixes orders. Switching servers clears the robots list and map cache until the new adapter returns data.
+  - **Collapse / expand**: the « / » chevron on the left rail edge collapses the list to a thin strip to reclaim horizontal space; when expanded, behavior is the same as before. Collapsed state is stored in the browser's localStorage (`odtSrvCollapsed`) and survives a reload.
+- On Config & Dispatch (right side): Dispatcher URL, Poll interval (s), Stuck threshold (s), Vehicle idle threshold (s), Dispatcher adapter. Language is switched from the top-right control (Chinese/English) and is **global** (not per server).
+- **Dispatcher** (调度系统): `RDS` (default) or `M4`. Switching takes effect immediately and is saved under the **current server** in `settings.json`. Choosing RDS or M4 shows the matching options (M4 reveals auth and scene for the **current server**; there is no multi-profile UI — connection is per left-sidebar server). See "M4 dispatcher" below.
+- A legacy flat `settings.json` is migrated once on startup into a `servers` list (backup: `settings.pre_server.json`); previous values land under one entry named from the old URL host.
 
 ### 2.2 Pools (站点池)
-- **Load stations from scene** (从调度系统场景加载站点): **the only manual entry point for loading the scene**. In one go it pulls the stations, pre-points, robot groups, scene geometry (routes) and point cloud (via `/downloadScene` when necessary) from RDS `/scene`, and it always fetches afresh; the Map tab reuses the result directly (see section 7).
+- **Load stations from scene** (从调度系统场景加载站点): **the only manual entry point for loading the scene**. In one go it pulls the stations, pre-points, robot groups, scene geometry (routes tessellated by curve type) and point cloud from the active dispatcher (RDS: `/scene` `normalPosList`, `/downloadScene` when needed; M4: `normalPosList` in the scene schema, else `GET /api/fleet/scenes/{sceneId}/download/{mapFile}` from `groupsMap.mapFile`), and it always fetches afresh; the Map tab reuses the result directly (see section 7).
 - The station table is read-only: it can be searched and filtered by type, shows positions and pre-points, and lists only stations already in a pool (see "Station list on the Pools tab (read-only)" below). Stations can be added to a pool in only two ways: click a station on the **Map** tab, or use **Paste stations manually** (comma/newline separated station names).
 - **Station pools**: the defaults are `start` and `end`. You can create any pool (letters/digits/underscore, not starting with a digit) with **New pool**, **Rename** it (custom pools; references in templates are updated accordingly), **Delete pool**, **Swap** two pools, and click × to remove a single station. Pools the current template does not use are marked "(not used by the template)".
 - **"In use" pools** only look at **enabled** steps: the pools used by enabled `Pool` steps, and the pools that enabled `Pre-point of step` steps finally point to (following the reference chain). A pool referenced only by disabled steps (for example `start` in a "drop-only" template where the pick and pre-point Wait steps are both disabled and only the drop is kept) does not count as in use: it is not shown in the summary, generating/auto dispatch does not require it to be non-empty, and the order's Stations column shows only the end station (with `pickPre` empty). The empty-pool validation (frontend and backend) applies only to pools in use.
@@ -34,8 +38,12 @@ The sub-tabs at the top switch between pages; the current sub-tab is remembered 
 - Options: "No repeated station within an order"; "Avoid reusing stations within a batch (sampling without replacement)".
 
 ### 2.3 Template (订单模板)
-- Template list: New / Copy / Delete / Import / Export (files are in `<data>/templates/*.json`), and you can switch to **Raw JSON mode**; the right side shows a live **Sample order preview (dispatcher JSON)** (the JSON the dispatcher actually receives).
-- The step table lets you add (**+ Add step**), delete, enable/disable, and reorder steps (buttons or **Drag to reorder**). See section 3 for the fields.
+- **Two-pane layout**: left is the template list (click to switch the active template) with bottom buttons New / Copy / Delete / Import / Export (files are in `<data>/templates/*.json`); right is the current template content.
+- **Template name** is editable on the right (renames and persists on change; must be a valid name). **Description** (`#tpl_title`) remains editable.
+- **Action mode (per step)**: next to **Operation** in the step table, a dropdown `binTask` | `operation` (shared by M4 and RDS; mix freely in one template). `binTask` = action name only, no args (args column hidden); `operation` = name + args. New steps default to `binTask`. There is no global "step action field" switch.
+- The step table lets you add (**+ Add step**), delete, enable/disable, and reorder steps (buttons or **Drag to reorder**); the **delete control is in the first column** with the drag handle / up-down buttons. You can switch to **Raw JSON mode**; below is a collapsible **Sample order preview (dispatcher JSON)** (the JSON the dispatcher actually receives). See section 3 for the fields.
+- The **variableShape column is shown only for RDS** (hidden for M4, header and cells); switching the dispatcher refreshes visibility.
+Step columns: location → **Mode** → **Action** (single input) → **Args** (operation only; hidden for binTask).
 
 ### 2.4 Dispatch & Generate (派单参数与生成)
 - **Robot group** (机器人组; RDS `group`; if none is chosen the field is omitted), **Vehicle** (指定车辆; empty = auto assign), **Priority** (优先级), **label (optional)**.
@@ -49,14 +57,14 @@ The sub-tabs at the top switch between pages; the current sub-tab is remembered 
 | Field | Description |
 |---|---|
 | On (启用) | Disabled steps generate no block |
-| ID | Unique within the template, must not be empty or duplicated; used for variable references and the default block suffix |
-| Name (名称) | Display only (may be Chinese) |
-| Block suffix `blockSuffix` (UI label: suffix) | RDS `blockId = order ID + suffix`, default `-<ID>` |
+| ID | **Required**; unique within the template, must not be empty or duplicated; used for variable references. Default block/step suffix is `-<ID>` (UI edits only ID; if an old template still has `blockSuffix`, generation still honors it) |
+| Note (说明; step `name`) | Optional display text (may be Chinese); may be empty — save/validate do not require it. Distinct from the template-level Description (`title`) |
 | Location (位置来源) `location` | `Pool` (站点池; `{"type":"pool","pool":"<pool name>"}`, picks a station from the pool according to the strategy; the dropdown lists all pools); `Pre-point of step` (另一步骤站点的前置点; `{"type":"pre","step":"<step ID>"}`, looks up the manual map first, then derives AP→LM from the scene); `Fixed station` (固定站点; `{"type":"fixed","station":"<station>"}`) |
 | Pre-point selection `select` / `selArg` | `pre` steps only. Which candidate to use when the station has several candidate pre-points; see "Multiple pre-points" below |
 | Operation (动作) `operation` | For example `JackLoad`, `JackUnload`, `ForkLoad`, `Wait`, `Script`; `none` means move only |
-| Args (JSON) (参数 args) | Must be a JSON object; multi-line edit box, its height can be dragged vertically |
-| variableShape | Optional; after ticking "on" enter `head` / `tail` (numbers, in meters), which are written to the block's `variableShape` |
+| Action mode `opMode` (动作模式) | `binTask` (name only) or `operation` (name + args); shared by M4/RDS; mix per step. New steps default to `binTask`. If omitted: M4 falls back to profile/`binTask`, RDS falls back to `operation` (legacy templates) |
+| Args (JSON) (参数 args) | Must be a JSON object; multi-line edit box, its height can be dragged vertically. Hidden and ignored when `opMode=binTask` |
+| variableShape | Column shown for RDS only; optional; after ticking "on" enter `head` / `tail` (numbers, in meters), which are written to the block's `variableShape`. Hidden when Dispatcher is M4 |
 
 **args variables** (substituted inside strings; an unknown variable is an error):
 `{start}` `{end}` `{<pool>}` the station picked from that pool for this order; `{pickPre}` `{dropPre}` the pre-points of the start/end stations; `{pre:<pool>}` the pre-point of that pool's station; `{stationOf:<step ID|stepN>}` the station of a step; `{preOf:<step>}` the pre-point of a step's station; `{orderId}` the order ID.
@@ -82,13 +90,14 @@ When the scene is loaded, **all** candidate pre-points of each station are store
 - The pre-point actually chosen is recorded for each order (`preChosen` in the order record); when the Test Orders tab's Stations column shows ⓟ, hover over it to see "step: station → pre-point (strategy)".
 - Example: `examples/templates/pre_select_demo.json`.
 
-The built-in `default` template = the original five-block RDS deadlock test order (pre-point Wait → pick → Script → drop → fork lift).
+The built-in `default` template = the original five-block RDS deadlock test order (pre-point Wait → pick → Script → drop → fork lift). On first install it is created only when no templates exist yet. **Adding a server** also writes `default` under that server's `templates/<serverId>/` and sets it active; if the user later deletes every template, the empty list is left alone (no re-seed).
 
 ## Map tab
 
 - Layers (**Point cloud**, **Routes**, **Stations**, **Vehicles**): next to Point cloud you can choose the point size thin / medium / bold / extra bold (screen pixels, unchanged when zooming); the choice is saved (settings + browser).
 - The **Station heading** layer: stations that have an angle in the scene get a purple heading arrow (RDS field `dir`, in radians; `angle`/`theta`/`yaw` are also recognized); stations without an angle are not drawn; stations with `ignoreDir=true` ("ignoreDir: any heading") get a light-colored arrow; hovering over a station shows its name, type and angle (degrees). Angles are saved with the scene cache.
-- The point cloud comes from the scene load (see section 7); you can also add to it with **Upload .smap** or by entering a local path (**or local path**). The Map tab itself does not trigger a scene load.
+- Point cloud and routes both come from the scene load (see section 7); the Map tab **no longer offers** manual **Upload .smap** or a local path. Both RDS and M4 pull the scene map from the connected dispatcher. The Map tab itself does not trigger a scene load.
+- With the Stations layer on, station names are drawn; LM and AP are both clickable into pools (same for M4 and RDS). M4 routes are tessellated from the scene curve type (Straight / Bezier / DegenerateBezier / NURBS / Arc, etc.), not drawn as straight endpoint links.
 
 ## 4. Robots
 
@@ -101,6 +110,7 @@ The built-in `default` template = the original five-block RDS deadlock test orde
 - **Sending**: tick drafts → set **Interval (s)** for this batch and **Max open orders** (0 = unlimited) → **Send selected**; you can also **Stop sending**, **Delete selected drafts**, and **⇄ Swap start/end of selected drafts** (rebuilt with the current template).
 - **Sent**: **Cancel selected**, **Cancel all open test orders** (terminate), **Clear sent list** (drafts are kept), and view the JSON (**View** in the JSON column).
 - **Filter**: State (multi-select; none checked = all), Vehicle contains, robot group, Stations (matches "start→end"), Order ID, **Stuck only**, **Hide finished**, **Clear filter**; shows "{n}/{total} match".
+- Vehicle and robot-group filters apply to sent orders only; drafts with no assigned vehicle/group stay visible.
 - **Sorting**: click a column header to toggle ascending/descending (Order ID, Stations, Vehicle, State, Created, Age, Unchanged, Started/Ended, Duration, etc.); the sort setting is remembered in localStorage.
 
 ## 6. States and stuck detection
@@ -117,7 +127,7 @@ The built-in `default` template = the original five-block RDS deadlock test orde
   - When the page is opened/refreshed, it **unconditionally restores from the cache**, without contacting RDS and without showing the overlay; the station area and the map tab's status line show "Scene loaded at HH:MM" (with the date if not today).
   - Only clicking **Load stations from scene** fetches from RDS again and updates the cache; Generate orders prefers the cached pre-points.
   - With no cache: if the pools are non-empty when the page opens, the scene is loaded automatically once; if Generate orders needs pre-points and the scene has not been loaded, it is loaded automatically.
-  - The Map tab **no longer has** a "reload scene/point cloud" button and never triggers a load itself; when no scene is loaded, its status line tells you to go to the Pools tab to load it ("Scene not loaded: go to Config & Dispatch → Pools and click "Load stations from dispatcher scene""). The Map tab can still add to the point cloud via **Upload .smap** or a local path.
+  - The Map tab **no longer has** a "reload scene/point cloud" button and never triggers a load itself; when no scene is loaded, its status line tells you to go to the Pools tab to load it ("Scene not loaded: go to Config & Dispatch → Pools and click "Load stations from dispatcher scene""). Point cloud and routes come only from that Pools-tab scene load (no manual `.smap` upload/path).
 - **Overlay and progress bar**: while loading, a full-screen translucent overlay + spinner + "Loading scene… (/scene can take 30-60 s)" is shown, with a progress bar, the current stage and the elapsed seconds ("{s} s elapsed") below it (Chinese/English); clicks and keyboard input are blocked, and it disappears automatically when done.
   - Stages: "Requesting /scene, waiting for the dispatcher…" (waiting for the response; the bar scrolls) → "Downloading scene" (with Content-Length it shows a percentage and downloaded/total size; without it, it shows downloaded KB/MB and the bar scrolls) → "Parsing stations / routes" → "Parsing point cloud" → "Writing cache".
   - When `/scene` contains no point cloud (`normalPosList`), the point cloud is taken from the map, adding these stages: "Downloading map (/downloadScene)" (also with a percentage or MB) → "Unpacking / parsing map" → "Downsampling point cloud" (shows the raw point count); when the map has not changed it shows "Map unchanged, reusing point cloud cache" and skips parsing and downsampling.
@@ -128,6 +138,7 @@ The built-in `default` template = the original five-block RDS deadlock test orde
   - A failure of the automatic load at page open: **no dialog**, the error is only shown in the station area.
   - The server treats a non-2xx HTTP status from `/scene`, a network error, a non-JSON-object response or a parse exception as a failure (it is never treated as a successful load with 0 stations).
 - **Browser cache**: pages and static assets are served with `Cache-Control: no-store`, and `app.js` carries a version number `?v=<modification time>`, so a refresh after deployment takes effect immediately.
+- **Version and build date**: a fixed bottom-left footer shows `vX.Y.Z · YYYY-MM-DD HH:MM UTC` (from `GET /api/version`; `BUILD_DATE` is UTC when the version file was written). It stays visible with the sidebar open/collapsed and on map-fill, and does not intercept clicks.
 
 ### Station heading: automatic backfill of old caches
 Stations in an old `scene_cache.json` have no `dir`. When the cache is restored at startup, if no station has an angle, a background task parses `dir`/`ignoreDir` from the local smap (the smapPath in the settings, or the map auto-downloaded under `maps\`), adds them to the cache and writes it back, without downloading the map again. It is logged as `dir_backfill`. If there is no local smap, just load the scene once more (the unit of the `dir` field from /scene is radians).
@@ -186,23 +197,22 @@ The list shows only stations that have been added to some pool, and no longer li
 The tool can also drive an M4 fleet server instead of RDS. RDS stays the default; nothing changes for RDS users.
 
 ### Setup
-1. On **Config & Dispatch → Connection**, set **Dispatcher** (调度系统) to `M4`. The **M4 connection** (M4 连接) box appears.
-2. Fill in one profile per M4 server. Each profile keeps its own values:
-   - **Profile** (配置) / profile name: any name, e.g. `lab`.
-   - **M4 URL** (M4 地址): `http://<m4-host>:<port>`. Ask the M4 administrator for the HTTP port; it differs between installations.
-   - **Scene ID** (场景 ID): the M4 scene orders are created in. Click **Test connection** (测试连接) to list the scenes, then pick one from the list.
-   - **Auth** (认证): **Auto** (自动; App ID / App key if both are filled in, otherwise username/password), **App ID / App key** (应用 ID / 密钥; machine clients, created by an M4 admin under proxy users), **Username / password** (用户名 / 密码; uses `POST /api/sign-in` and keeps the session cookie, signing in again after a 401), or **None** (无).
-   - **App ID** (应用 ID), **App key** (应用密钥), **Username** (用户名), **Password** (密码).
-   - **Step action field** (步骤动作字段): `binTask` (default) sends `rbkArgs: {"binTask": <operation>, ...args}`; `operation` sends `rbkArgs: {"operation": <operation>, ...args}`. Script steps always use `operation: "Script"`.
-3. Click **Save profile** (保存配置). **Delete profile** (删除配置) removes the profile shown.
+1. On **Config & Dispatch → Connection**, set **Dispatcher** (调度系统) to `M4`. The **M4 connection** (M4 连接) box appears; the top **Dispatcher URL** is that M4's `http://<m4-host>:<port>` (ask the M4 administrator for the port). M4 connection is **per left-sidebar server** (no multi-profile picker inside one server).
+2. Fill in the fields for the current server (including the URL):
+   - **Scene** (场景): the M4 scene orders are created in. Click **Test connection** (测试连接), then pick one from the dropdown shown as **name（ID）** (no manual ID entry).
+   - **Auth** (认证): choose one — **App ID / App key** (应用 ID / 密钥; machine clients from M4 proxy users, headers `xyy-app-id` / `xyy-app-key`) or **Username / password** (用户名 / 密码; `POST /api/sign-in` session cookie, re-sign-in after 401). Only the fields for the chosen mode are shown.
+   - **App ID** (应用 ID), **App key** (应用密钥), **Username** (用户名), **Password** (密码) — only the fields for the chosen auth mode are shown.
+3. Click **Save** (保存) to write both the top settings and the current server's M4 connection (edits also auto-save).
+4. **Action mode** is chosen **per step** on **Template** (订单模板) (no global "step action field" on the right). `binTask` sends `rbkArgs: {"binTask": <operation>}` (no ordinary args); `operation` sends `rbkArgs: {"operation": <operation>, ...args}`. Script steps always use `operation: "Script"`. A leftover stored `opMode` is only a default fallback; the UI no longer edits it.
 
-The app key and password are stored only in the local, gitignored `settings.json`. They are masked as `******` in the UI, in `/api/settings` and `/api/m4`, and they never appear in the logs. Leaving `******` in a field keeps the stored value. As an alternative, the environment variables `ODT_M4_APP_ID`, `ODT_M4_APP_KEY`, `ODT_M4_USER`, `ODT_M4_PASSWORD` and `ODT_M4_SCENE` fill in any field that is empty in the profile.
+The app key and password are stored only in the local, gitignored `settings.json`. They are masked as `******` in the UI, in `/api/settings` and `/api/m4`, and they never appear in the logs. Leaving `******` in a field keeps the stored value. As an alternative, the environment variables `ODT_M4_APP_ID`, `ODT_M4_APP_KEY`, `ODT_M4_USER`, `ODT_M4_PASSWORD` and `ODT_M4_SCENE` fill in any field that is empty in the connection.
 
-### Per-step overrides (template step `args`)
-These keys are read by the M4 adapter and are not sent inside `rbkArgs`:
-- `m4Mode`: `"binTask"` or `"operation"`, overriding **Step action field** for this step.
-- `m4BinTask`: the bin task name to send instead of the operation name, e.g. `"Load"`.
-- `forLoad` / `forUnload`: by default a step whose operation contains "unload" gets `forUnload: true`, one containing "load" gets `forLoad: true`, and other steps get both false. Set them explicitly to override.
+### Per-step hints (template step `args` / `opMode`)
+- Step field `opMode`: `"binTask"` or `"operation"` (primary; shared by M4 and RDS).
+- These keys are read by the M4 adapter and are not sent inside `rbkArgs`:
+  - `m4Mode` (legacy): `"binTask"` or `"operation"`; migrated into `opMode` on validate, then optional cleanup.
+  - `m4BinTask`: the bin task name to send instead of the operation name, e.g. `"Load"`.
+  - `forLoad` / `forUnload`: by default a step whose operation contains "unload" gets `forUnload: true`, one containing "load" gets `forLoad: true`, and other steps get both false. Set them explicitly to override.
 
 ### How the M4 adapter maps things
 - RDS order = M4 transport order; RDS block = M4 step (step `id` = order ID + block suffix, same as the RDS blockId); RDS `complete` = M4 `stepFixed`.
@@ -220,8 +230,12 @@ These keys are read by the M4 adapter and are not sent inside `rbkArgs`:
 | Cancelling, Withdrawing, unknown | as reported, upper case | not terminal, keep polling |
 
   Query errors (HTTP errors, 401/403, timeouts) and add-steps/complete-order errors only pause, exactly like RDS. Only Done and Cancelled stop appending.
-- Robots: `GET /api/fleet/robots/all-all?sceneId=`. Stations and map: `GET /api/fleet/scenes/schema/{sceneId}`, using `structure.areas[].mergedMap` (points, paths, bins). Unknown fields are ignored. A station's pre-point is the nearest `LM` point connected to it by a path, and bins are listed under their point.
+- Robots: `GET /api/fleet/robots/all-all?sceneId=`. Stations and map: `GET /api/fleet/scenes/schema/{sceneId}`, using `structure.areas[].mergedMap` (points, paths, bins, point cloud `normalPosList` when present). Unknown fields are ignored. The Map tab loads every point (including LM); a station's pre-point is still the nearest connected `LM`; routes are tessellated from `className`/`curveType` plus control points; the point cloud comes from `normalPosList` in the schema when present, otherwise from each area's `groupsMap.*.mapFile` downloaded via `GET /api/fleet/scenes/{sceneId}/download/{mapFile}` (same URL the M4 UI uses; `.smap` parsed like RDS `/downloadScene`, same downsample/cache). Not from station coordinates.
 - **Cancel selected** (取消选中订单) and **Cancel all open test orders** (取消全部未完成测试订单) use `POST /api/fleet/orders/cancel {sceneId, orderId}`.
 
 ### Testing without a real M4
 `python tools/fake_m4.py --port 18090` starts a mock M4 server with mock data (scene `scene-1`, app ID/key `mock-app`/`mock-key`, login `mockuser`/`mockpass`). Order IDs containing `fault` report a fault for a while and then recover, `qerr` makes the order query fail for a while, and `xcancel` gets cancelled in M4 after the first step.
+
+On startup, `default` is created only when the template store is empty; renaming it away will not recreate it.
+Map label **Select:** is a dropdown of **station pool names** (click a station to add it to that pool).
+Map tab fills the viewport (no page scrollbars); the canvas resizes with the window.

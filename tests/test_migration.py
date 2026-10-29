@@ -61,6 +61,19 @@ class MigrationTest(unittest.TestCase):
         C.migrate_templates()
         self.assertEqual(json.dumps(C.S["store"].get("default")["steps"]), json.dumps(T.validate(T.builtin_default()) or T.builtin_default()["steps"]))
 
+
+    def test_no_recreate_default_when_others_exist(self):
+        # rename-away scenario: other templates exist, do not recreate default.json
+        C.S["store"].put({"name": "AnyPallet", "title": "x", "version": 1, "pools": ["start", "end"],
+            "steps": [{"id": "s", "name": "", "location": {"type": "pool", "pool": "start"}, "operation": "Wait", "args": {}}]})
+        if "default" in C.S["store"].names():
+            C.S["store"].delete("default")
+        C.save_settings({"activeTemplate": "default"})  # stale pointer after rename
+        notes = C.migrate_templates()
+        self.assertNotIn("default", C.S["store"].names())
+        self.assertTrue(all("default.json created" not in n for n in notes))
+        self.assertEqual(C.load_settings().get("activeTemplate"), "AnyPallet")
+
     def test_drafts_and_sent_upgrade(self):
         now = 1.7e9
         legacy_draft = {"id": "dl-aaa", "pair": ["AP1", "AP6"], "pre": "LM6", "state": "待下发", "sent": now, "changed": now, "created": now, "sig": "", "error": None,
@@ -76,7 +89,9 @@ class MigrationTest(unittest.TestCase):
         self.assertTrue(o["dl-bbb"]["batch"] and o["dl-ccc"]["batch"])  # legacy history batches assigned
         self.assertEqual(o["dl-bbb"]["batchMeta"]["kind"], "hist")
         C.save_drafts(); C.save_sent()
-        with open(os.path.join(self.d, "drafts.json"), encoding="utf-8") as f: self.assertEqual(json.load(f)[0]["picks"]["end"], "AP6")
+        with open(os.path.join(self.d, "drafts.json"), encoding="utf-8") as f: raw = json.load(f)
+        drafts = (next(iter(raw["byServer"].values())) if isinstance(raw, dict) and isinstance(raw.get("byServer"), dict) else raw)
+        self.assertEqual(drafts[0]["picks"]["end"], "AP6")
 
     def test_swap_legacy_draft(self):
         C.S["prepoints"] = dict(PREPOINTS); C.migrate_templates()

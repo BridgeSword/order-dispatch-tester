@@ -7,6 +7,7 @@
   cancel  POST /api/fleet/orders/cancel {sceneId, orderId}
   robots  GET  /api/fleet/robots/all-all?sceneId=
   scenes  GET  /api/fleet/scenes/list ; map: GET /api/fleet/scenes/schema/{sceneId}
+  smap    GET  /api/fleet/scenes/{sceneId}/download/{mapFile}  (UI link for groupsMap.mapFile)
 Success = HTTP 200 (body is the result itself, may be empty). Errors: 400 {code, message}, 401, 403.
 Auth: headers xyy-app-id / xyy-app-key, or POST /api/sign-in {username, password} (session cookie kept in a jar).
 Credentials come from the UI (settings.json, gitignored) or env vars ODT_M4_APP_ID / ODT_M4_APP_KEY / ODT_M4_USER /
@@ -19,9 +20,9 @@ Status mapping to the core's internal (RDS-style) states, so core.py needs no M4
   Pending -> WAITING if not sealed else RUNNING, Cancelling / Withdrawing / unknown -> passed through upper-cased
   (non-terminal, never stops appending). Raw values are kept in m4Status / fault / faultReason.
 Step: Done -> FINISHED, Cancelled -> STOPPED, Executing -> RUNNING, Executable -> CREATED, other -> raw."""
-import http.cookiejar, json, os, time, urllib.parse, urllib.request, urllib.error
+import http.cookiejar, io, json, os, time, urllib.parse, urllib.request, urllib.error, zipfile
 from .base import DispatcherAdapter
-from . import m4_scene
+from . import m4_scene, rds_scene
 
 ORDER_MAP = {"Done": "FINISHED", "Cancelled": "STOPPED", "ToBeAllocated": "TOBEDISPATCHED", "Allocated": "CREATED", "Executing": "RUNNING"}
 STEP_MAP = {"Done": "FINISHED", "Cancelled": "STOPPED", "Executing": "RUNNING", "Executable": "CREATED"}
@@ -80,7 +81,7 @@ class M4Adapter(DispatcherAdapter):
                      "password": o.get("password") or e("ODT_M4_PASSWORD", ""), "opMode": o.get("opMode") or "binTask",
                      "auth": o.get("auth") or ""}
         if o.get("base"): self.base = o["base"]
-        self.jar.clear(); self._signed = False
+        self.jar.clear(); self._signed = False; self._last_scene = None
 
     @property
     def scene_id(self): return self.opts.get("sceneId") or ""
@@ -93,17 +94,25 @@ class M4Adapter(DispatcherAdapter):
         return "none"
 
     # ------------------------------------------------------------ payload
+    def step_mode(self, st, hint=None):
+        """Per-step binTask|operation. Prefer step.opMode, then legacy args.m4Mode, then profile opMode, else binTask."""
+        hint = hint or {}
+        m = st.get("opMode") or hint.get("m4Mode") or self.opts.get("opMode") or "binTask"
+        return m if m in ("binTask", "operation") else "binTask"
+
     def build_step(self, order, st):
         args = dict(st.get("args") if isinstance(st.get("args"), dict) else {})
         hint = {k: args.pop(k) for k in STEP_KEYS if k in args}
-        op = st.get("operation"); mode = hint.get("m4Mode") or self.opts.get("opMode") or "binTask"
+        op = st.get("operation"); mode = self.step_mode(st, hint)
         s = {"id": order["id"] + st["suffix"], "location": st["location"]}
         if op == "Script":
             rb = {"operation": "Script", "script_name": args.pop("script_name", ""), "script_args": args.pop("script_args", {})}
             rb.update(args); s["rbkArgs"] = rb
         elif op and op != "none":
-            if mode == "operation": rb = {"operation": op}; rb.update(args)
-            else: rb = {"binTask": hint.get("m4BinTask") or op}; rb.update(args)
+            if mode == "operation":
+                rb = {"operation": op}; rb.update(args)
+            else:
+                rb = {"binTask": hint.get("m4BinTask") or op}  # binTask: action name only, no ordinary args
             s["rbkArgs"] = rb
         low = str(hint.get("m4BinTask") or op or "").lower()
         unload = "unload" in low; load = not unload and "load" in low
@@ -233,10 +242,86 @@ class M4Adapter(DispatcherAdapter):
         st, js, txt = self.request("GET", "/api/fleet/scenes/schema/" + urllib.parse.quote(self.scene_id), timeout=90, quiet=True)
         if st != 200: return st, None, txt
         if not isinstance(js, dict): return st, None, "invalid JSON: " + txt[:200]
+        self._last_scene = js
         return st, js, txt
     def parse_stations(self, scene): return m4_scene.parse_scene(scene)
     def parse_groups(self, scene): return m4_scene.parse_groups(scene)
     def extract_geom(self, scene, points_only=False): return m4_scene.extract_geom(scene, points_only)
+    def decode_map(self, raw): return rds_scene.decode_smap(raw)
+
+    def _map_file_records(self, js):
+        """Unique (mapName, mapFile) from structure.areas[].groupsMap (skips disabled areas)."""
+        out, seen = [], set()
+        for area in ((js or {}).get("structure") or {}).get("areas") or []:
+            if not isinstance(area, dict) or area.get("disabled"): continue
+            gm = area.get("groupsMap")
+            if not isinstance(gm, dict): continue
+            for rec in gm.values():
+                if not isinstance(rec, dict): continue
+                mf = (rec.get("mapFile") or "").strip()
+                if not mf or mf in seen: continue
+                seen.add(mf)
+                mn = (rec.get("mapName") or os.path.basename(mf) or "map.smap").strip()
+                if not mn.lower().endswith(".smap"): mn += ".smap"
+                out.append((mn, mf))
+        return out
+
+    def _get_bytes(self, path, timeout, progress=None):
+        """Authenticated binary GET (for .smap download). Returns (status, bytes)."""
+        prog = progress or (lambda *a, **k: None)
+        if self.auth_mode() == "login" and not self._signed: self.sign_in(timeout)
+        url = self.base.rstrip("/") + path
+        req = urllib.request.Request(url, method="GET", headers=self._headers())
+        try:
+            with self.opener.open(req, timeout=timeout) as r:
+                try: total = int(r.headers.get("Content-Length") or 0) or None
+                except ValueError: total = None
+                buf = bytearray(); prog("mapdl", 0, total)
+                while True:
+                    c = r.read1(262144) if hasattr(r, "read1") else r.read(262144)
+                    if not c: break
+                    buf += c; prog("mapdl", len(buf), total)
+                return r.status, bytes(buf)
+        except urllib.error.HTTPError as e:
+            if e.code == 401 and self.auth_mode() == "login" and self.sign_in(timeout)[0]:
+                return self._get_bytes(path, timeout, progress)
+            return e.code, b""
+        except Exception as e:
+            return None, str(e).encode()
+
+    def download_maps(self, timeout=120, progress=None):
+        """(status, zip-bytes) of scene .smap files.
+
+        M4 UI downloads each ``groupsMap.*.mapFile`` via
+        ``GET /api/fleet/scenes/{sceneId}/download/{mapFile}`` (not ``/api/files/get``).
+        When the schema has no ``normalPosList``, core uses this the same way as RDS ``/downloadScene``.
+        """
+        prog = progress or (lambda *a, **k: None)
+        if not self.scene_id: return None, b""
+        js = getattr(self, "_last_scene", None)
+        if not isinstance(js, dict):
+            st, js, _ = self.scene(progress=prog)
+            if st != 200 or not isinstance(js, dict): return st, b""
+        files = self._map_file_records(js)
+        if not files: return 404, b""
+        sid = urllib.parse.quote(self.scene_id, safe="")
+        packed = io.BytesIO()
+        n_ok = 0
+        with zipfile.ZipFile(packed, "w", zipfile.ZIP_STORED) as zf:
+            for mn, mf in files:
+                # Keep slashes in mapFile (UI: `/api/fleet/scenes/${id}/download/${mapFile}`)
+                path = "/api/fleet/scenes/%s/download/%s" % (sid, urllib.parse.quote(mf, safe="/"))
+                st, raw = self._get_bytes(path, timeout, progress=prog)
+                if st != 200 or not raw:
+                    self.log("http", method="GET", url=self.base.rstrip("/") + path, status=st, resp="(map download %d bytes)" % len(raw or b""))
+                    continue
+                # Avoid colliding basenames when several groups share a mapName
+                name = mn if mn not in zf.namelist() else ("%s_%s" % (n_ok, mn))
+                zf.writestr(name, raw); n_ok += 1
+                self.log("http", method="GET", url=self.base.rstrip("/") + path, status=st, resp="(map %s %d bytes)" % (name, len(raw)))
+        if not n_ok: return 404, b""
+        return 200, packed.getvalue()
+
     def raw_get(self, path): return self.request("GET", path, quiet=True)
 
 def ms_ts(v):

@@ -3,7 +3,7 @@
 
 A template is an ordered list of steps. Every step has
   id            unique key inside the template (also used for variableShape roles / blockId suffix)
-  name          display name (used in the vsTag column)
+  name          optional display note/label (used in vsTag when set; empty allowed)
   enabled       bool
   location      one of
                   {"type": "pool",  "pool": "<pool name>"}       random/round-robin/... pick from a named pool
@@ -12,9 +12,12 @@ A template is an ordered list of steps. Every step has
                     optional "select": nearest (default) | index | name | dir | random, "selArg": see PRE_SELECT
                   {"type": "fixed", "station": "<station name>"}
   operation     operation name ("none" = move only)
+  opMode        "binTask" | "operation" (per-step; both M4 and RDS). binTask = action name only;
+                operation = action name + args. Missing: adapters fall back (M4: profile opMode/binTask;
+                RDS: operation). Legacy args.m4Mode is migrated into opMode on validate.
   args          dict; strings may contain variables (see substitute())
   vsOn / variableShape   optional {"head": float, "tail": float}
-  blockSuffix   optional, adapter hint for the per-step id suffix (default "-<id>")
+  blockSuffix   optional legacy override for per-step id suffix (default "-<id>"); UI no longer edits this — id is the suffix source for new edits
 
 Adapters (order_tester.adapters.*) turn the neutral order produced by build_order() into a
 dispatcher payload (e.g. RDS setOrder JSON).
@@ -73,6 +76,16 @@ def validate(t):
         ids.add(sid)
         s.setdefault("name", sid); s.setdefault("enabled", True); s.setdefault("args", {}); s.setdefault("operation", "none")
         if not isinstance(s["args"], dict): errs.append(where + ": args must be an object")
+        # migrate legacy args.m4Mode -> step.opMode (optional cleanup of the old key)
+        if s.get("opMode") not in ("binTask", "operation"):
+            am = s["args"].get("m4Mode") if isinstance(s.get("args"), dict) else None
+            if am in ("binTask", "operation"):
+                s["opMode"] = am
+                if isinstance(s.get("args"), dict): s["args"].pop("m4Mode", None)
+        elif isinstance(s.get("args"), dict) and s["args"].get("m4Mode") in ("binTask", "operation"):
+            s["args"].pop("m4Mode", None)  # step.opMode wins; drop legacy duplicate
+        if s.get("opMode") not in ("binTask", "operation", None):
+            errs.append(where + ": opMode must be binTask or operation")
         loc = s.get("location")
         if not isinstance(loc, dict) or loc.get("type") not in ("pool", "pre", "fixed"):
             errs.append(where + ": location.type must be pool/pre/fixed"); continue
@@ -276,6 +289,7 @@ def build_order(t, picks, cfg, pre_of, oid=None, cands_of=None, rng=None, lenien
         ctx.step = s
         st = {"id": s["id"], "name": s.get("name") or s["id"], "location": locs[s["id"]], "operation": s.get("operation") or "none",
               "args": substitute(copy.deepcopy(s.get("args") or {}), ctx), "suffix": s.get("blockSuffix") or ("-" + s["id"])}
+        if s.get("opMode") in ("binTask", "operation"): st["opMode"] = s["opMode"]
         vs = s.get("variableShape")
         if s.get("vsOn") and isinstance(vs, dict) and vs.get("head") is not None and vs.get("tail") is not None:
             st["variableShape"] = {"head": float(vs["head"]), "tail": float(vs["tail"])}
@@ -375,8 +389,15 @@ class Store:
         with open(tmp, "w", encoding="utf-8") as f: json.dump(t, f, ensure_ascii=False, indent=1)
         os.replace(tmp, p); return t
     def delete(self, name):
-        if len(self.names()) <= 1: raise ValueError("cannot delete the last template")
+        # empty template list is allowed (user may delete all; add_server seeds once at create)
+        if name not in self.names(): raise ValueError("template not found")
         os.remove(self.path(name))
+    def rename(self, old, new, overwrite=False):
+        if not NAME_RE.match(old or "") or not NAME_RE.match(new or ""): raise ValueError("bad template name")
+        if old == new: return self.get(old)
+        if old not in self.names(): raise ValueError("template not found")
+        if new in self.names() and not overwrite: raise ValueError("template exists")
+        t = self.get(old); t["name"] = new; self.put(t); os.remove(self.path(old)); return t
 
 # ---------------------------------------------------------------- legacy migration
 def from_legacy_cfg(cfg):

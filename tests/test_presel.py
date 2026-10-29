@@ -154,7 +154,8 @@ class HeadingBackfillTest(unittest.TestCase):
         self.assertEqual(by["AP1"]["dirDeg"], 90.0); self.assertEqual(by["AP2"]["dir"], 0.0)  # omitted in map = heading 0
         self.assertEqual(by["LM1"]["dirDeg"], -90.0); self.assertTrue(by["LM1"]["ignoreDir"]); self.assertNotIn("dir", by["ZZ"])
         time.sleep(0.2)
-        with open(C.P["scene_cache"], encoding="utf-8") as f: saved = json.load(f)
+        with open(C.P["scene_cache"], encoding="utf-8") as f: raw = json.load(f)
+        saved = (raw["byServer"].get(C.load_settings().get("currentServerId")) or next(iter(raw["byServer"].values()))) if isinstance(raw.get("byServer"), dict) else raw
         self.assertEqual({q["name"]: q.get("dirDeg") for q in saved["stations"]}["AP1"], 90.0); self.assertEqual(saved["loadedAt"], 123.0)
         self.assertIn("rds_x.smap", saved["dirSrc"]); self.assertNotIn("fromCache", saved)
 
